@@ -1,0 +1,6 @@
+.env
+.pg-local/
+.pg-log
+__pycache__/
+node_modules/
+pages-upload/

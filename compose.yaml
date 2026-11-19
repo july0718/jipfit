@@ -1,0 +1,69 @@
+services:
+  db:
+    image: postgres:18
+    working_dir: /docker-entrypoint-initdb.d
+    environment:
+      POSTGRES_DB: jipfit
+      POSTGRES_USER: jipfit
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "jipfit", "-d", "jipfit"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - jipfit_pg:/var/lib/postgresql
+      - ./backend/db:/docker-entrypoint-initdb.d:ro
+  api:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: jipfit
+      PGUSER: jipfit
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/complexes', timeout=4).close()"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  web:
+    build: ./frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5173:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1/api/complexes"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  updater:
+    profiles: ["updates"]
+    build: ./backend
+    command: ["python", "-u", "refresh.py"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: jipfit
+      PGUSER: jipfit
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      MOLIT_SERVICE_KEY: ${MOLIT_SERVICE_KEY:-}
+volumes:
+  jipfit_pg:
+
+
+
+
