@@ -34,8 +34,7 @@ def fetch_month(month):
             raise ValueError("Inconsistent MOLIT pages")
         for item in items:
             row = {node.tag: (node.text or "").strip() for node in item}
-            if row.get("cdealType", "") not in {"", "-"} or row.get("cdealDay", "") not in {"", "-"}:
-                continue
+            cancelled = row.get("cdealType", "") not in {"", "-"} or row.get("cdealDay", "") not in {"", "-"}
             day = date(int(row["dealYear"]), int(row["dealMonth"]), int(row["dealDay"]))
             dong, lot, name = (row[k] for k in ("umdNm", "jibun", "aptNm"))
             if not all((dong, lot, name)) or day.strftime("%Y%m") != month or row["sggCd"] != "11215":
@@ -50,7 +49,7 @@ def fetch_month(month):
             complexes[cid] = (cid, name, address+" "+lot, built)
             group = int(round(area / 5)) * 5
             floor = int(row["floor"]) if row.get("floor") else None
-            trades[(cid, group, day, area, floor, price)] += 1
+            trades[(cid, group, day, area, floor, price, cancelled)] += 1
         seen += len(items)
         if seen == total:
             return complexes, trades

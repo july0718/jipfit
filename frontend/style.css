@@ -49,3 +49,4 @@ thead th { color:#51645e; font-size:14px; }
 .trade-history caption { font-size:15px; margin-top:4px; }
 .trade-history td:first-child { text-align:left; }
 .trade-history button { margin-top:8px; }
+.price-chart { margin: 1.25rem 0; } .price-chart figcaption { font-weight: 650; } .price-chart svg { display: block; width: 100%; max-width: 42rem; } .price-chart text { fill: #41565a; font-size: 12px; }

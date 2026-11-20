@@ -16,6 +16,7 @@ from inference import forecast, load_model
 async def lifespan(app):
     with connect() as db:
         db.execute("SELECT pg_advisory_xact_lock(1121506)")
+        db.execute((Path(__file__).parent / "db/trade_status.sql").read_text(encoding="utf-8"))
         db.execute((Path(__file__).parent / "db/user_accounts.sql").read_text(encoding="utf-8"))
     app.state.model = load_model()
     yield
@@ -70,7 +71,7 @@ def complex_detail(complex_id: str = Query(min_length=1)):
 def list_trades(complex_id: str = Query(min_length=1), area_group: int = Query(gt=0)):
     with connect() as db:
         return db.execute("""
-            SELECT contract_date, area, floor, price_manwon
+            SELECT contract_date, area, floor, price_manwon, is_cancelled
             FROM trades
             WHERE complex_id = %s AND area_group = %s
             ORDER BY contract_date DESC, trade_id DESC

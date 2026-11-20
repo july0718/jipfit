@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { ForecastChart, TradeChart } from "./PriceCharts";
 import Account from "./Account";
 import DistrictMap from "./DistrictMap";
 
@@ -46,6 +47,7 @@ function Results({ home, data }) {
       <tr key={f.months}><th scope="row">{f.months}개월 후</th><td>{money(f.price_manwon)}</td>
         <td className={f.return_percent >= 0 ? "positive" : "negative"}>{percent.format(f.return_percent)}%</td></tr>
     )}</tbody></table>
+    <ForecastChart data={data}/>
     {data.calculated_at && <p>예측 계산 {seoulTime(data.calculated_at)} (한국시간)</p>}
   </>;
 }
@@ -70,10 +72,10 @@ function TradeHistory({ complexId, areaGroup }) {
     {error ? <p role="alert">{error} <button onClick={() => setAttempt(a => a + 1)}>다시 조회</button></p>
       : rows === null ? <p>실거래 이력을 불러오는 중입니다.</p>
       : rows.length === 0 ? <p>이 면적군에 등록된 실거래가 없습니다.</p>
-      : <><table><caption>최근 계약순 · 총 {rows.length.toLocaleString("ko-KR")}건</caption>
+      : <><TradeChart rows={rows}/><table><caption>최근 계약순 · 총 {rows.length.toLocaleString("ko-KR")}건</caption>
           <thead><tr><th>계약일</th><th>전용면적 (㎡)</th><th>층</th><th>거래금액 (만 원)</th></tr></thead>
           <tbody>{rows.slice(0, shown).map((row, index) =>
-            <tr key={index}><td>{row.contract_date}</td><td>{Number(row.area).toLocaleString("ko-KR", { maximumFractionDigits: 6 })}</td>
+            <tr key={index}><td>{row.contract_date}{row.is_cancelled && <strong> · 계약 해제</strong>}</td><td>{Number(row.area).toLocaleString("ko-KR", { maximumFractionDigits: 6 })}</td>
               <td>{row.floor ?? "미상"}</td><td>{Number(row.price_manwon).toLocaleString("ko-KR")}</td></tr>
           )}</tbody></table>
           {shown < rows.length && <button onClick={() => setShown(n => n + 20)}>이전 거래 더 보기</button>}</>}

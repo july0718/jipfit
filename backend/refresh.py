@@ -17,7 +17,7 @@ from molit import fetch_month
 
 ROOT = Path(__file__).resolve().parent
 KST = timezone(timedelta(hours=9))
-FIELDS = "complex_id,area_group,contract_date,area,floor,price_manwon"
+FIELDS = "complex_id,area_group,contract_date,area,floor,price_manwon,is_cancelled"
 
 
 def reconcile(db, month, complexes, wanted):
@@ -29,7 +29,7 @@ def reconcile(db, month, complexes, wanted):
             ON CONFLICT DO NOTHING
         """, complexes.values())
         areas = defaultdict(list)
-        for cid, group, _, area, _, _ in wanted:
+        for cid, group, _, area, _, _, _ in wanted:
             areas[cid, group].append(float(area))
         cur.executemany("""
             INSERT INTO area_groups VALUES (%s,%s,%s) ON CONFLICT DO NOTHING
@@ -41,11 +41,11 @@ def reconcile(db, month, complexes, wanted):
         if existing and not wanted:
             raise ValueError("Empty API month would remove existing trades")
         counts = Counter({k: len(ids) for k, ids in existing.items()})
-        removed = [id_ for k, ids in existing.items() for id_ in ids[wanted[k]:]]
+        removed = [id_ for k, ids in existing.items() if not k[-1] for id_ in ids[wanted[k]:]]
         if removed:
             cur.execute("DELETE FROM trades WHERE trade_id = ANY(%s)", (removed,))
         additions = wanted - counts
-        cur.executemany(f"INSERT INTO trades({FIELDS}) VALUES (%s,%s,%s,%s,%s,%s)", additions.elements())
+        cur.executemany(f"INSERT INTO trades({FIELDS}) VALUES (%s,%s,%s,%s,%s,%s,%s)", additions.elements())
         return sum(additions.values()), len(removed)
 
 
@@ -53,7 +53,7 @@ def publish(db, anchor, macro_path):
     cur = db.execute("""
         SELECT t.complex_id,t.area_group,t.contract_date,t.area,t.floor,t.price_manwon,c.built
         FROM trades t JOIN complexes c USING(complex_id)
-        WHERE t.contract_date >= %s AND t.contract_date < %s
+        WHERE NOT t.is_cancelled AND t.contract_date >= %s AND t.contract_date < %s
     """, ((anchor-19).start_time.date(), (anchor-1).start_time.date()))
     frame = pd.DataFrame(cur.fetchall(), columns=[c.name for c in cur.description])
     inputs = build_inputs(frame, anchor, macro_path)
@@ -74,6 +74,8 @@ def refresh():
     today = datetime.now(KST).date()
     anchor = pd.Period(today, freq="M")
     with psycopg.connect(connect_timeout=8) as db, tempfile.TemporaryDirectory() as temp:
+        with db.transaction():
+            db.execute((ROOT/"db/trade_status.sql").read_text(encoding="utf-8"))
         db.execute("SELECT pg_advisory_xact_lock(1121505)")
         db.execute("""CREATE TABLE IF NOT EXISTS refresh_runs (
             day date PRIMARY KEY, finished_at timestamptz NOT NULL, added integer NOT NULL,
