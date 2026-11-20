@@ -219,7 +219,8 @@ function App() {
   return <>
     <header><div className="brand">집핏</div><span>광진구 아파트</span><button className="open-compare" onClick={() => setCompareOpen(true)}>단지 비교 ({compared.length}/2)</button></header>
     {compareOpen && <Comparison items={compared} months={horizon} setMonths={setHorizon} remove={removeCompared} close={() => setCompareOpen(false)}/>}
-    <main><h1>아파트 매매가 예측</h1><Account home={home} homes={homes} onSelect={select}/><DistrictMap complexes={visible} onSelect={selectComplex} selectedId={home?.complex_id}/>
+    <main><h1>아파트 매매가 예측</h1><Account home={home} homes={homes} onSelect={select} compared={compared} horizon={horizon}
+      onOpenComparison={(items, months) => { setCompared(items); setHorizon(months); setCompareOpen(true); }}/><DistrictMap complexes={visible} onSelect={selectComplex} selectedId={home?.complex_id}/>
       <p className="map-key">초록색은 예측 가능한 단지, 회색은 실거래만 있는 단지입니다.</p>
       <div className="layout">
       <section className="panel"><h2>단지·면적 선택</h2>

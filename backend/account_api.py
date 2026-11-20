@@ -77,3 +77,86 @@ def favorite(body: Favorite, request: Request):
         if not accounts.set_favorite(db, user["id"], body.complex_id, body.area_group, body.save):
             raise HTTPException(404, "등록되지 않은 단지·면적군입니다.")
         return accounts.profile(db, user)
+
+
+class Comparison(BaseModel):
+    left_id: str = Field(min_length=1, max_length=512)
+    left_area: int = Field(gt=0)
+    right_id: str = Field(min_length=1, max_length=512)
+    right_area: int = Field(gt=0)
+    months: int
+    save: bool = True
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class Note(BaseModel):
+    complex_id: str = Field(min_length=1, max_length=512)
+    note: str = Field(max_length=2000)
+
+
+class Seen(BaseModel):
+    complex_id: str = Field(min_length=1, max_length=512)
+    area_group: int = Field(gt=0)
+    latest_trade_id: int = Field(ge=0)
+    new_month: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def member(db, request):
+    user = accounts.current_user(db, token(request))
+    if not user:
+        raise HTTPException(401, "다시 로그인해 주세요.")
+    return user
+
+
+@router.post("/comparison", dependencies=[Depends(require_action)])
+def comparison(body: Comparison, request: Request):
+    with connect() as db:
+        user = member(db, request)
+        if body.left_id == body.right_id or body.months not in (3, 6, 12):
+            raise HTTPException(422, "서로 다른 두 단지와 전망 기간을 선택해 주세요.")
+        params = (user["id"], body.left_id, body.left_area, body.right_id, body.right_area, body.months)
+        if body.save:
+            valid = db.execute("""
+                SELECT count(*) AS n FROM area_groups WHERE (complex_id,area_group) IN ((%s,%s),(%s,%s))
+            """, params[1:5]).fetchone()
+            if valid["n"] != 2:
+                raise HTTPException(404, "등록되지 않은 면적군입니다.")
+            db.execute("""
+                INSERT INTO saved_comparisons VALUES (%s,%s,%s,%s,%s,%s,COALESCE(%s,''))
+                ON CONFLICT (user_id,left_id,left_area,right_id,right_area,months)
+                DO UPDATE SET note=COALESCE(%s,saved_comparisons.note)
+            """, (*params, body.note, body.note))
+        else:
+            db.execute("""
+                DELETE FROM saved_comparisons WHERE
+                (user_id,left_id,left_area,right_id,right_area,months)=(%s,%s,%s,%s,%s,%s)
+            """, params)
+        return accounts.profile(db, user)
+
+
+@router.post("/note", dependencies=[Depends(require_action)])
+def save_note(body: Note, request: Request):
+    with connect() as db:
+        user = member(db, request)
+        key = (user["id"], body.complex_id)
+        if body.note.strip():
+            if not db.execute("SELECT 1 FROM complexes WHERE complex_id=%s", (body.complex_id,)).fetchone():
+                raise HTTPException(404, "등록되지 않은 단지입니다.")
+            db.execute("""
+                INSERT INTO complex_notes VALUES (%s,%s,%s) ON CONFLICT (user_id,complex_id)
+                DO UPDATE SET note=excluded.note
+            """, (*key, body.note.strip()))
+        else:
+            db.execute("DELETE FROM complex_notes WHERE user_id=%s AND complex_id=%s", key)
+        return accounts.profile(db, user)
+
+
+@router.post("/seen", dependencies=[Depends(require_action)])
+def mark_seen(body: Seen, request: Request):
+    with connect() as db:
+        user = member(db, request)
+        db.execute("""
+            UPDATE favorites SET seen_trade=greatest(seen_trade,%s), seen_month=greatest(seen_month,%s)
+            WHERE user_id=%s AND complex_id=%s AND area_group=%s
+        """, (body.latest_trade_id, body.new_month or "", user["id"], body.complex_id, body.area_group))
+        return accounts.profile(db, user)

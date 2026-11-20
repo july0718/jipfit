@@ -17,7 +17,15 @@ async function accountRequest(action, body) {
   return result;
 }
 
-export default function Account({home, homes, onSelect}) {
+function NoteEditor({ initial, busy, save, label }) {
+  return <form onSubmit={e => {
+    e.preventDefault();
+    save(new FormData(e.currentTarget).get("note"));
+  }}><label>{label}<textarea name="note" defaultValue={initial} maxLength={2000} rows={2}/></label>
+    <button disabled={busy}>메모 저장</button></form>;
+}
+
+export default function Account({home, homes, onSelect, compared, horizon, onOpenComparison}) {
   const [profile, setProfile] = useState(guest);
   const [mode, setMode] = useState("");
   const [message, setMessage] = useState("");
@@ -30,6 +38,24 @@ export default function Account({home, homes, onSelect}) {
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    if (!profile.username || busy) return;
+    let active = true;
+    let pending = false;
+    async function refresh() {
+      if (pending || document.hidden) return;
+      pending = true;
+      try {
+        const next = await accountRequest("");
+        if (active) setProfile(next);
+      } catch { /* Keep the last profile until the next refresh. */ }
+      finally { pending = false; }
+    }
+    const timer = setInterval(refresh, 60000);
+    window.addEventListener("focus", refresh);
+    return () => { active = false; clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, [profile.username, busy]);
+
   async function submit(action, body) {
     setBusy(true);
     setMessage("");
@@ -37,7 +63,7 @@ export default function Account({home, homes, onSelect}) {
       setProfile(await accountRequest(action, body));
       setMode("");
     } catch (err) {
-      if (action === "/favorite" && err.status === 401) setProfile(guest);
+      if (action !== "/login" && err.status === 401) setProfile(guest);
       setMessage(err.message);
     } finally {
       setBusy(false);
@@ -51,6 +77,10 @@ export default function Account({home, homes, onSelect}) {
   }
 
   const saved = home && profile.favorites.some(f => f.complex_id === home.complex_id && f.area_group === home.area_group);
+  const lookup = (id, area) => homes?.find(g => g.complex_id === id && (area == null || g.area_group === area));
+  const notes = profile.notes || [];
+  const note = notes.find(n => n.complex_id === home?.complex_id)?.note || "";
+  const notifications = profile.favorites.filter(f => f.new_trades > 0 || f.new_month);
   return <section className="account panel" aria-label="내 관심 단지">
     <div className="account-row"><h2>{profile.username ? profile.username + "님의 관심 단지" : "내 관심 단지"}</h2>
       {profile.username ? <button disabled={busy} onClick={() => submit("/logout", {})}>로그아웃</button>
@@ -73,6 +103,34 @@ export default function Account({home, homes, onSelect}) {
           return <li key={JSON.stringify([f.complex_id,f.area_group])}><button disabled={!item || busy}
             onClick={() => onSelect(item)}>{f.name} · {f.area_group}㎡</button> <small>{f.address}</small></li>;
         })}</ul>}
+      <h3>단지 메모</h3>
+      {home && <NoteEditor key={JSON.stringify([profile.username,home.complex_id,note])} initial={note} busy={busy}
+        label={home.name + " 메모"} save={text => submit("/note", {complex_id:home.complex_id, note:text})}/>}
+      {notes.map(n => <p key={n.complex_id}><button disabled={!lookup(n.complex_id) || busy}
+        onClick={() => onSelect(lookup(n.complex_id))}>{lookup(n.complex_id)?.name || n.complex_id}</button> {n.note}</p>)}
+      <h3>저장한 비교</h3>
+      {compared.length === 2 && <button disabled={busy} onClick={() => submit("/comparison", {
+        left_id:compared[0].complex_id, left_area:compared[0].area_group,
+        right_id:compared[1].complex_id, right_area:compared[1].area_group, months:horizon
+      })}>현재 비교 저장 · {horizon}개월</button>}
+      {!profile.comparisons?.length && <p>두 단지를 비교에 담으면 현재 조합을 저장할 수 있습니다.</p>}
+      {(profile.comparisons || []).map(c => {
+        const left = lookup(c.left_id,c.left_area), right = lookup(c.right_id,c.right_area);
+        return <div className="saved-comparison" key={JSON.stringify([profile.username,c.left_id,c.left_area,c.right_id,c.right_area,c.months])}>
+          <button disabled={!left || !right || busy} onClick={() => onOpenComparison([left,right], c.months)}>
+            {left?.name || c.left_id} {c.left_area}㎡군 · {right?.name || c.right_id} {c.right_area}㎡군 · {c.months}개월 열기</button>
+          <button disabled={busy} onClick={() => submit("/comparison", {...c,save:false})}>비교 삭제</button>
+          <NoteEditor key={c.note} label="비교 메모" initial={c.note} busy={busy}
+            save={text => submit("/comparison", {...c,note:text})}/>
+        </div>;
+      })}
+      <h3>관심 단지 갱신 알림</h3>
+      {notifications.length === 0 && <p>새 알림이 없습니다.</p>}
+      {notifications.map(f => <p key={JSON.stringify([f.complex_id,f.area_group])}>
+        {f.name} {f.area_group}㎡군 · {[f.new_trades > 0 && "새 거래 " + f.new_trades + "건",
+          f.new_month && "새 전망 기준월 " + f.new_month].filter(Boolean).join(" · ")}{" "}
+        <button disabled={busy} onClick={() => submit("/seen", {complex_id:f.complex_id,area_group:f.area_group,
+          latest_trade_id:f.latest_trade_id,new_month:f.new_month})}>읽음</button></p>)}
     </>}
     {message && <p role="alert">{message}</p>}
   </section>;

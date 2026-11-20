@@ -63,10 +63,23 @@ def profile(db, user):
     if not user:
         return {"username": None, "favorites": []}
     rows = db.execute("""
-        SELECT f.complex_id,f.area_group,c.name,c.address FROM favorites f
+        SELECT f.complex_id,f.area_group,c.name,c.address,
+               (SELECT count(*) FROM trades t WHERE (t.complex_id,t.area_group)=(f.complex_id,f.area_group)
+                 AND NOT t.is_cancelled AND t.trade_id>f.seen_trade) AS new_trades,
+               (SELECT max(month) FROM model_inputs m WHERE (m.complex_id,m.area_group)=(f.complex_id,f.area_group)
+                 AND m.month>f.seen_month) AS new_month,
+               COALESCE((SELECT max(trade_id) FROM trades t WHERE (t.complex_id,t.area_group)=(f.complex_id,f.area_group)
+                 AND NOT t.is_cancelled),0) AS latest_trade_id
+        FROM favorites f
         JOIN complexes c USING(complex_id) WHERE user_id=%s ORDER BY c.name,c.address,f.area_group
     """, (user["id"],)).fetchall()
-    return {"username": user["username"], "favorites": rows}
+    comparisons = db.execute("""
+        SELECT left_id,left_area,right_id,right_area,months,note FROM saved_comparisons
+        WHERE user_id=%s ORDER BY left_id,right_id,left_area,right_area,months
+    """, (user["id"],)).fetchall()
+    notes = db.execute("SELECT complex_id,note FROM complex_notes WHERE user_id=%s ORDER BY complex_id",
+                       (user["id"],)).fetchall()
+    return {"username": user["username"], "favorites": rows, "comparisons": comparisons, "notes": notes}
 
 
 def set_favorite(db, user_id, cid, group, save):
@@ -75,7 +88,13 @@ def set_favorite(db, user_id, cid, group, save):
                             (cid, group)).fetchone()
         if not exists:
             return False
-        db.execute("INSERT INTO favorites VALUES (%s,%s,%s) ON CONFLICT DO NOTHING", (user_id,cid,group))
+        db.execute("""
+            INSERT INTO favorites(user_id,complex_id,area_group,seen_trade,seen_month)
+            SELECT %s,%s,%s,
+              COALESCE((SELECT max(trade_id) FROM trades WHERE complex_id=%s AND area_group=%s AND NOT is_cancelled),0),
+              COALESCE((SELECT max(month) FROM model_inputs WHERE complex_id=%s AND area_group=%s),'')
+            ON CONFLICT DO NOTHING
+        """, (user_id,cid,group,cid,group,cid,group))
     else:
         db.execute("DELETE FROM favorites WHERE user_id=%s AND complex_id=%s AND area_group=%s",
                    (user_id,cid,group))
