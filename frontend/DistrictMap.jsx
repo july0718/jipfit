@@ -1,4 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
+import pendingCoordinateReviewIds from "./geocoding-pending439.json";
+
+// Coordinates can be archived without marking a complex as currently existing.
+// Hide unverified complexes from map markers until existence status is adjudicated.
+const unverifiedIds = new Set(pendingCoordinateReviewIds);
+const eligibleForMap = complex => !unverifiedIds.has(complex.complex_id);
 
 let sdk;
 export function loadMaps() {
@@ -69,7 +75,7 @@ function markerContent(c, selected) {
 
 export default function DistrictMap({ district, allComplexes, complexes, onSelect, selectedId }) {
   const center = React.useMemo(() => {
-    const points = allComplexes.filter(c => c.latitude != null && c.longitude != null && c.address.split(" ")[1] === district);
+    const points = allComplexes.filter(c => eligibleForMap(c) && c.latitude != null && c.longitude != null && c.address.split(" ")[1] === district);
     if (!points.length) return [37.5665, 126.978];
     return [points.reduce((s,c) => s + Number(c.latitude), 0) / points.length,
             points.reduce((s,c) => s + Number(c.longitude), 0) / points.length];
@@ -117,7 +123,7 @@ export default function DistrictMap({ district, allComplexes, complexes, onSelec
       const bounds = map.getBounds();
       if (!bounds) return;
       clear();
-      const inside = complexes.filter(c => c.latitude != null && c.longitude != null &&
+      const inside = complexes.filter(c => eligibleForMap(c) && c.latitude != null && c.longitude != null &&
         bounds.hasLatLng(new maps.LatLng(c.latitude, c.longitude)));
       markers = capped(inside, limit, selectedId).map(c => {
         const marker = new maps.Marker({
@@ -135,10 +141,10 @@ export default function DistrictMap({ district, allComplexes, complexes, onSelec
   }, [maps, complexes, selectedId, limit, district, lat, lng]);
   useEffect(() => {
     const c = complexes.find(item => item.complex_id === selectedId);
-    if (instance.current && c?.latitude != null && c.longitude != null)
+    if (instance.current && c && eligibleForMap(c) && c.latitude != null && c.longitude != null)
       instance.current.panTo(new maps.LatLng(c.latitude, c.longitude));
   }, [selectedId, maps, complexes]);
-  const positioned = complexes.filter(c => c.latitude != null && c.longitude != null);
+  const positioned = complexes.filter(c => eligibleForMap(c) && c.latitude != null && c.longitude != null);
   return <><label>현재 지도 범위의 마커<select value={limit} onChange={e => setLimit(Number(e.target.value))}>
     <option value={20}>20개</option><option value={100}>100개</option><option value={Infinity}>전체</option>
   </select></label><div className="map-box">
