@@ -9,7 +9,10 @@ from xml.etree import ElementTree as ET
 ENDPOINT = "https://apis.data.go.kr/1613000/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade"
 
 
-def fetch_month(month):
+from districts import DISTRICTS, GWANGJIN
+
+
+def fetch_month(month, district=GWANGJIN):
     key = os.environ.get("MOLIT_SERVICE_KEY")
     if not key:
         raise ValueError("Set MOLIT_SERVICE_KEY to the decoded public data portal key")
@@ -19,7 +22,7 @@ def fetch_month(month):
     trades = Counter()
     complexes = {}
     while True:
-        query = urlencode(dict(serviceKey=key, LAWD_CD="11215", DEAL_YMD=month,
+        query = urlencode(dict(serviceKey=key, LAWD_CD=district, DEAL_YMD=month,
                                pageNo=page, numOfRows=1000))
         with urlopen(ENDPOINT + "?" + query, timeout=45) as response:
             root = ET.fromstring(response.read())
@@ -37,9 +40,9 @@ def fetch_month(month):
             cancelled = row.get("cdealType", "") not in {"", "-"} or row.get("cdealDay", "") not in {"", "-"}
             day = date(int(row["dealYear"]), int(row["dealMonth"]), int(row["dealDay"]))
             dong, lot, name = (row[k] for k in ("umdNm", "jibun", "aptNm"))
-            if not all((dong, lot, name)) or day.strftime("%Y%m") != month or row["sggCd"] != "11215":
+            if not all((dong, lot, name)) or day.strftime("%Y%m") != month or row["sggCd"] != district:
                 raise ValueError("Invalid trade location or contract month")
-            address = "서울특별시 광진구 " + dong
+            address = f"서울특별시 {DISTRICTS[district]} {dong}"
             cid = "|".join((address, lot, name))
             area = Decimal(row["excluUseAr"])
             price = Decimal(row["dealAmount"].replace(",", ""))

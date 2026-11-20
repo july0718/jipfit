@@ -67,7 +67,10 @@ function markerContent(c, selected) {
   return card.outerHTML;
 }
 
-export default function DistrictMap({ complexes, onSelect, selectedId }) {
+export default function DistrictMap({ district, complexes, onSelect, selectedId }) {
+  const lat = district === "광진구" ? 37.546 : 37.553;
+  const lng = district === "광진구" ? 127.086 : district === "성동구" ? 127.042 : 127.065;
+  const width = district ? 0.075 : 0.145;
   const [limit, setLimit] = useState(20);
   const container = useRef(null);
   const instance = useRef(null);
@@ -88,11 +91,11 @@ export default function DistrictMap({ complexes, onSelect, selectedId }) {
   useEffect(() => {
     if (!maps) return;
     const map = new maps.Map(container.current, {
-      center: new maps.LatLng(37.546, 127.086), zoom: 13, zoomControl: true
+      center: new maps.LatLng(lat, lng), zoom: district ? 13 : 12, zoomControl: true
     });
     instance.current = map;
     return () => { instance.current = null; map.destroy?.(); };
-  }, [maps]);
+  }, [maps, district]);
   useEffect(() => {
     if (!instance.current) return;
     const map = instance.current;
@@ -123,7 +126,7 @@ export default function DistrictMap({ complexes, onSelect, selectedId }) {
     const idle = maps.Event.addListener(map, "idle", redraw);
     redraw();
     return () => { maps.Event.removeListener(idle); clear(); };
-  }, [maps, complexes, selectedId, limit]);
+  }, [maps, complexes, selectedId, limit, district]);
   useEffect(() => {
     const c = complexes.find(item => item.complex_id === selectedId);
     if (instance.current && c?.latitude != null && c.longitude != null)
@@ -133,14 +136,14 @@ export default function DistrictMap({ complexes, onSelect, selectedId }) {
   return <><label>현재 지도 범위의 마커<select value={limit} onChange={e => setLimit(Number(e.target.value))}>
     <option value={20}>20개</option><option value={100}>100개</option><option value={Infinity}>전체</option>
   </select></label><div className="map-box">
-    <div ref={container} className="district-map" aria-label="광진구 단지 지도"/>
-    {failure ? <div className="coordinate-map" aria-label="광진구 좌표 지도">
+    <div ref={container} className="district-map" aria-label="단지 지도"/>
+    {failure ? <div className="coordinate-map" aria-label="단지 좌표 지도">
       <p>단지 위치도 · {failure}</p>
-      {capped(positioned.filter(c => c.longitude >= 127.05 && c.longitude <= 127.125 && c.latitude >= 37.521 && c.latitude <= 37.581), limit, selectedId).map(c => {
+      {capped(positioned.filter(c => Math.abs(c.longitude-lng) <= width/2 && Math.abs(c.latitude-lat) <= 0.035), limit, selectedId).map(c => {
         const label = priceLabel(c);
         return <button key={c.complex_id} title={c.name} aria-label={c.name}
         className={markerClass(label, selectedId === c.complex_id)}
-        style={{left: ((c.longitude - 127.05) / 0.075 * 100) + "%", top: ((37.581 - c.latitude) / 0.06 * 100) + "%"}}
+        style={{left: ((c.longitude - lng + width/2) / width * 100) + "%", top: ((lat + 0.035 - c.latitude) / 0.07 * 100) + "%"}}
         onClick={() => onSelect(c)}><span>{c.name}</span><b>{label.price}</b><small>{label.detail}</small></button>; })}
     </div>
       : !maps && <p className="map-status">지도를 불러오는 중입니다.</p>}

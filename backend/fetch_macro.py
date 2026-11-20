@@ -71,7 +71,10 @@ def extract_rates(content):
     return sorted(events.items())
 
 
-def extract_gwangjin_index(workbook_bytes):
+from districts import DISTRICTS, GWANGJIN
+
+
+def extract_index(workbook_bytes, district):
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', UserWarning)
         workbook = openpyxl.load_workbook(io.BytesIO(workbook_bytes), read_only=True, data_only=True)
@@ -80,7 +83,7 @@ def extract_gwangjin_index(workbook_bytes):
     sheet.reset_dimensions()
     rows = list(sheet.iter_rows(values_only=True))
     header = next(row for row in rows if any(re.fullmatch(r'\d{4}년\s*\d{1,2}월', str(c or '')) for c in row))
-    candidates = [row for row in rows if len(row) > 4 and tuple(row[:4]) == ('서울', '강북지역', '동북권', '광진구')]
+    candidates = [row for row in rows if len(row) > 4 and tuple(row[:4]) == ('서울', '강북지역', '동북권', DISTRICTS[district])]
     if len(candidates) != 1:
         raise ValueError(f'Expected one Gwangjin raw apartment-index row, found {len(candidates)}.')
     target = candidates[0]
@@ -102,6 +105,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--refresh', action='store_true')
     parser.add_argument('--end-month', default='2026-10')
+    parser.add_argument('--district', choices=DISTRICTS, default=GWANGJIN)
     args = parser.parse_args()
     ROOT.mkdir(parents=True, exist_ok=True)
     bok_html = download(BOK_URL, 'bok_base_rate.html', args.refresh).decode('utf-8')
@@ -129,7 +133,7 @@ def main():
         member = paths[0]
         workbook_bytes = archive.read(member)
     (ROOT / 'reb_apartment_index.xlsx').write_bytes(workbook_bytes)
-    indexes, sheet_name = extract_gwangjin_index(workbook_bytes)
+    indexes, sheet_name = extract_index(workbook_bytes, args.district)
 
     with (ROOT / 'policy_rate_events.csv').open('w', encoding='utf-8-sig', newline='') as handle:
         writer = csv.writer(handle)
@@ -166,7 +170,7 @@ def main():
 
     manifest = {
         'retrieved_on': RETRIEVED_ON,
-        'scope': 'Only policy rate and Gwangjin apartment sales-price index; no mortgage-rate, school, station or supply features.',
+        'scope': 'Only policy rate and district apartment sales-price index; no mortgage-rate, school, station or supply features.',
         'policy_rate': {
             'source_url': BOK_URL,
             'method': 'Official public rate-change table; month-end last effective rate, not a monthly average.',
@@ -183,7 +187,7 @@ def main():
             'latest_posted_at': metadata['userDttm'],
             'archive_member': member,
             'sheet': sheet_name,
-            'region_row': ['서울', '강북지역', '동북권', '광진구'],
+            'region_row': ['서울', '강북지역', '동북권', DISTRICTS[args.district]],
             'series_type': 'Monthly apartment sale price survey index, raw/unadjusted series; not transaction-price index.',
             'start_month': '%04d-%02d' % first_index,
             'end_month': '%04d-%02d' % last_index,

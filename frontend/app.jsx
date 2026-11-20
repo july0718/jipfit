@@ -47,6 +47,7 @@ function Results({ home, data }) {
       <tr key={f.months}><th scope="row">{f.months}개월 후</th><td>{money(f.price_manwon)}</td>
         <td className={f.return_percent >= 0 ? "positive" : "negative"}>{percent.format(f.return_percent)}%</td></tr>
     )}</tbody></table>
+    {data.pilot && <p>성동구 시범 전망 · 광진구 학습 모델 적용, 지역별 성능 검증 전</p>}
     <ForecastChart data={data}/>
     {data.calculated_at && <p>예측 계산 {seoulTime(data.calculated_at)} (한국시간)</p>}
   </>;
@@ -108,6 +109,7 @@ function Comparison({ items, months, setMonths, remove, close }) {
   const columns = [useComparedHome(items[0]), useComparedHome(items[1])];
   useEffect(() => { dialog.current.showModal(); }, []);
   const fields = [
+    ["예측 기준월", d => d.forecast ? d.forecast.as_of + (d.forecast.pilot ? " · 시범" : "") : "—"],
     ["전용면적군", d => d.item.area_group + "㎡군"],
     ["모델 대표면적", d => d.forecast ? d.forecast.representative_area + "㎡" : "—"],
     ["준공연도", d => d.detail.built + "년"],
@@ -160,6 +162,7 @@ function App() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("count");
   const [horizon, setHorizon] = useState(3);
+  const [district, setDistrict] = useState("광진구");
   const [onlyReady, setOnlyReady] = useState(false);
   const complexes = useMemo(() => {
     const index = new Map();
@@ -170,6 +173,7 @@ function App() {
     return Array.from(index.values());
   }, [homes]);
   const visible = useMemo(() => complexes.filter(c =>
+    (!district || c.address.split(" ")[1] === district) &&
     (c.name + " " + c.address).includes(query.trim()) &&
     (!onlyReady || c.groups.some(g => g.predictable))
   ).sort((a, b) => {
@@ -183,7 +187,7 @@ function App() {
       if (left !== right) return right > left ? 1 : -1;
     }
     return b.trade_count - a.trade_count || a.complex_id.localeCompare(b.complex_id, "ko");
-  }), [complexes, query, onlyReady, sort, horizon]);
+  }), [complexes, query, onlyReady, sort, horizon, district]);
   const selected = complexes.find(c => c.complex_id === home?.complex_id);
   function selectComplex(c) {
     select(c.groups.find(g => g.predictable) || c.groups[0]);
@@ -217,10 +221,12 @@ function App() {
   }
 
   return <>
-    <header><div className="brand">집핏</div><span>광진구 아파트</span><button className="open-compare" onClick={() => setCompareOpen(true)}>단지 비교 ({compared.length}/2)</button></header>
+    <header><div className="brand">집핏</div><span>서울 아파트</span><button className="open-compare" onClick={() => setCompareOpen(true)}>단지 비교 ({compared.length}/2)</button></header>
     {compareOpen && <Comparison items={compared} months={horizon} setMonths={setHorizon} remove={removeCompared} close={() => setCompareOpen(false)}/>}
     <main><h1>아파트 매매가 예측</h1><Account home={home} homes={homes} onSelect={select} compared={compared} horizon={horizon}
-      onOpenComparison={(items, months) => { setCompared(items); setHorizon(months); setCompareOpen(true); }}/><DistrictMap complexes={visible} onSelect={selectComplex} selectedId={home?.complex_id}/>
+      onOpenComparison={(items, months) => { setCompared(items); setHorizon(months); setCompareOpen(true); }}/><label>지역<select value={district} onChange={e => { setDistrict(e.target.value); pending.current?.abort(); setHome(null); setData(null); setError(""); }}>
+        <option value="광진구">광진구</option><option value="성동구">성동구 · 시범</option><option value="">전체 지역</option>
+      </select></label><DistrictMap district={district} complexes={visible} onSelect={selectComplex} selectedId={home?.complex_id}/>
       <p className="map-key">초록색은 예측 가능한 단지, 회색은 실거래만 있는 단지입니다.</p>
       <div className="layout">
       <section className="panel"><h2>단지·면적 선택</h2>

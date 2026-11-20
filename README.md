@@ -124,3 +124,19 @@ docker compose -f compose.yaml -f compose.pages.yaml logs --tail 50 tunnel
 Cloudflare Pages에서 Direct Upload 프로젝트를 만들고 pages-upload 폴더를 업로드합니다. Settings의 Variables and Secrets에서 Production 텍스트 변수 API_ORIGIN에 로그의 https://…trycloudflare.com 주소를 저장하고 다시 배포합니다. Pages 주소의 /api/complexes에서 JSON이 보이고 단지 선택 후 예측 표가 뜨는지 확인합니다. 네이버 지도 Web 서비스 URL에도 새 Pages 주소를 등록합니다.
 
 Quick Tunnel 주소는 터널 재생성 시 바뀔 수 있습니다. 상시 운영 시 Cloudflare에서 관리하는 고정 API 도메인을 Tunnel로 연결하고 API_ORIGIN을 해당 HTTPS 주소로 설정합니다. Docker 호스트를 끄면 Pages 화면에 예측 서버 연결 오류가 표시됩니다.
+
+## 서울 시범 운영 · 광진구와 성동구
+
+기존 광진구 단지 ID와 회원 자료를 유지합니다. 성동구(11200) 최초 수집은 모델 입력을 만들기 위해 기준월 포함 20개월을 조회합니다. 이후 두 구는 독립된 수집 기록을 사용합니다. 광진구와 성동구가 동일한 구형 수집기를 공유하지 않도록 **기존 updater를 먼저 중지**하고 다음 순서로 전환합니다.
+
+```powershell
+docker compose --profile updates stop updater
+docker compose --profile updates build api web updater
+docker compose up -d --wait api web
+docker compose --profile updates run --rm updater python refresh.py --once --district 11200
+docker compose --profile updates up -d updater
+docker compose exec api python verify_service.py http://web --district 11215
+docker compose exec api python verify_service.py http://web --district 11200
+```
+
+성동구 전망에는 성동구 매매가격지수와 광진구에서 학습한 모델을 사용합니다. 지역별 오차 검증은 6-3에서 수행합니다. 기존 학습 산출물의 입력 이름을 유지하면서 지수 값은 요청한 지역에 맞춰 생성합니다. 좌표가 없는 성동구 단지는 목록에서 조회하며, 행당동 380 서울숲리버뷰자이는 주소 일치 시 확인된 대표 좌표를 연결합니다. 지도·목록으로 광진구와 성동구 후보를 한 개씩 담아 비교 창에서 각 단지의 기준월과 3·6·12개월 전망을 확인합니다.

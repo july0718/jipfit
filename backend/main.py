@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi import FastAPI, HTTPException, Query
 from account_api import router
 from database import connect
+from districts import DISTRICTS
 
 from math import exp, expm1
 from inference import HORIZONS, forecast, load_model, predict_growth
@@ -18,6 +19,7 @@ async def lifespan(app):
     with connect() as db:
         db.execute("SELECT pg_advisory_xact_lock(1121506)")
         db.execute((Path(__file__).parent / "db/trade_status.sql").read_text(encoding="utf-8"))
+        db.execute((Path(__file__).parent / "db/regions.sql").read_text(encoding="utf-8"))
         db.execute((Path(__file__).parent / "db/user_accounts.sql").read_text(encoding="utf-8"))
     app.state.model = load_model()
     yield
@@ -41,7 +43,7 @@ def list_complexes(include_sort: bool = False):
             SELECT c.complex_id, c.name, c.address, c.latitude, c.longitude,
                    a.area_group, a.representative_area,
                    EXISTS (SELECT 1 FROM model_inputs m
-                           WHERE m.month = (SELECT max(month) FROM model_inputs)
+                           WHERE m.month = (SELECT d.month FROM district_input_months d WHERE d.district=split_part(m.complex_id,' ',2))
                              AND (m.complex_id, m.area_group) = (a.complex_id, a.area_group)) AS predictable
             FROM complexes c JOIN area_groups a USING (complex_id)
             ORDER BY c.name, c.complex_id, a.area_group
@@ -58,8 +60,8 @@ def list_complexes(include_sort: bool = False):
             ORDER BY complex_id, area_group, contract_date DESC, trade_id DESC
         """)}
         inputs = db.execute("""
-            SELECT DISTINCT ON (complex_id) * FROM model_inputs
-            WHERE month = (SELECT max(month) FROM model_inputs)
+            SELECT DISTINCT ON (complex_id) m.* FROM model_inputs m
+            JOIN district_input_months d ON d.district=split_part(m.complex_id,' ',2) AND m.month=d.month
             ORDER BY complex_id, area_group
         """).fetchall()
     reference_units = {(r["complex_id"], r["area_group"]): exp(r["log_current"]) for r in inputs}
@@ -67,7 +69,6 @@ def list_complexes(include_sort: bool = False):
     if inputs:
         for row, rates in zip(inputs, predict_growth(app.state.model, inputs), strict=True):
             returns[row["complex_id"]] = dict(zip(HORIZONS, (100 * expm1(r) for r in rates), strict=True))
-    default_groups = {r["complex_id"]: r["area_group"] for r in inputs}
     for row in rows:
         cid = row["complex_id"]
         key = cid, row["area_group"]
@@ -96,6 +97,10 @@ def complex_detail(complex_id: str = Query(min_length=1)):
         detail["last_sync_at"] = (db.execute(
             "SELECT max(finished_at) AS ts FROM refresh_runs"
         ).fetchone()["ts"] if exists else None)
+        district = complex_id.split(" ")[1]
+        if district != "광진구":
+            detail["last_sync_at"] = db.execute("SELECT max(finished_at) AS ts FROM district_refresh_runs WHERE district=%s",
+                                                (next((k for k,v in DISTRICTS.items() if v == district), None),)).fetchone()["ts"]
         return detail
 
 
@@ -118,12 +123,13 @@ def predict(complex_id: str = Query(min_length=1), area_group: int = Query(gt=0)
             SELECT m.*, a.representative_area
             FROM model_inputs m JOIN area_groups a USING (complex_id, area_group)
             WHERE m.complex_id = %s AND m.area_group = %s
-              AND m.month = COALESCE(%s, (SELECT max(month) FROM model_inputs))
+              AND m.month = COALESCE(%s, (SELECT d.month FROM district_input_months d WHERE d.district=split_part(m.complex_id,' ',2)))
             ORDER BY m.month DESC LIMIT 1
         """, (complex_id, area_group, as_of)).fetchone()
     if row is None:
         raise HTTPException(404, "선택한 단지와 면적군의 모델 입력이 없습니다.")
     result = forecast(app.state.model, row)
+    result["pilot"] = complex_id.split(" ")[1] != "광진구"
     result["calculated_at"] = datetime.now(timezone.utc)
     return result
 

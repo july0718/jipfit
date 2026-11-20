@@ -48,7 +48,7 @@ def live_reference():
         rows = db.execute("""
             SELECT m.*, a.representative_area
             FROM model_inputs m JOIN area_groups a USING (complex_id, area_group)
-            WHERE month = (SELECT max(month) FROM model_inputs)
+            JOIN district_input_months d ON d.district=split_part(m.complex_id,' ',2) AND m.month=d.month
         """).fetchall()
     if not rows:
         raise ValueError("No live model inputs")
@@ -58,17 +58,18 @@ def live_reference():
         key = row["complex_id"], str(row["area_group"])
         inputs[key] = row
         expected[key] = {f["months"]: f["price_manwon"] for f in forecast(model, row)["forecasts"]}
-    return rows[0]["month"], expected, inputs
+    return "district latest", expected, inputs
 
 
 def validate(base_url, live=False):
     month, expected, snapshot = live_reference() if live else shipped_reference()
     for (complex_id, area_group), prices in expected.items():
-        params = urlencode(dict(complex_id=complex_id, area_group=area_group, as_of=month))
+        as_of = snapshot[complex_id, area_group]["month"]
+        params = urlencode(dict(complex_id=complex_id, area_group=area_group, as_of=as_of))
         with urlopen(f"{base_url.rstrip('/')}/api/predict?{params}", timeout=20) as response:
             result = json.load(response)
         forecasts = result["forecasts"]
-        if (result["complex_id"], str(result["area_group"]), result["as_of"]) != (complex_id, area_group, month):
+        if (result["complex_id"], str(result["area_group"]), result["as_of"]) != (complex_id, area_group, as_of):
             raise ValueError(f"Unexpected snapshot for {complex_id} {area_group}")
         if [f["months"] for f in forecasts] != [3, 6, 12]:
             raise ValueError("Unexpected forecast horizons")
