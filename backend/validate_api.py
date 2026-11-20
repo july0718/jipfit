@@ -16,6 +16,15 @@ def read_rows(path):
         return list(csv.DictReader(source))
 
 
+def explain_difference(reference, result, prices, forecast):
+    area = float(result["representative_area"])
+    live_unit = result["reference_price_manwon"] / area
+    reference_unit = math.exp(float(reference["log_current"]))
+    print(f"Reference unit price: {reference_unit:.8f}, API unit price: {live_unit:.8f} manwon/m2")
+    print(f"API representative area: {area} m2")
+    print(f"Expected: {prices[forecast['months']]:.8f}, API: {forecast['price_manwon']:.8f} manwon")
+
+
 def validate(base_url):
     inputs = read_rows(ROOT / "db/gwangjin/inputs.csv")
     months = {row["month"] for row in inputs}
@@ -27,6 +36,7 @@ def validate(base_url):
         expected[row["complex_id"], row["area_group"]][int(row["months"])] = float(row["future_price_manwon"])
     if expected.keys() != {(row["complex_id"], row["area_group"]) for row in inputs}:
         raise ValueError("Reference group mismatch")
+    snapshot = {(r["complex_id"], r["area_group"]): r for r in inputs}
     for (complex_id, area_group), prices in expected.items():
         params = urlencode(dict(complex_id=complex_id, area_group=area_group, as_of=month))
         with urlopen(f"{base_url.rstrip('/')}/api/predict?{params}", timeout=20) as response:
@@ -39,6 +49,7 @@ def validate(base_url):
         for f in forecasts:
             price = prices[f["months"]]
             if not math.isclose(f["price_manwon"], price, rel_tol=1e-10, abs_tol=1e-8):
+                explain_difference(snapshot[complex_id, area_group], result, prices, f)
                 raise ValueError(f"Price mismatch: {complex_id} {area_group} {f}")
     print(f"{month}: {len(expected)} groups, {3 * len(expected)} API prices matched")
 
