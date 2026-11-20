@@ -4,7 +4,14 @@ import pendingCoordinateReviewIds from "./map-unverified-complexes.json";
 // Coordinates can be archived without marking a complex as currently existing.
 // Hide unverified complexes from map markers until existence status is adjudicated.
 const unverifiedIds = new Set(pendingCoordinateReviewIds);
-const eligibleForMap = complex => !unverifiedIds.has(complex.complex_id);
+const pricedGroup = complex => complex.groups?.find(group =>
+  group.predictable && Number.isFinite(Number(group.marker_price_manwon)) &&
+  Number(group.marker_price_manwon) > 0) || complex.groups?.find(group =>
+  group.marker_price_manwon != null &&
+  Number.isFinite(Number(group.marker_price_manwon)) &&
+  Number(group.marker_price_manwon) > 0);
+const eligibleForMap = complex => !unverifiedIds.has(complex.complex_id) &&
+  Number(complex.trade_count) > 0 && Boolean(pricedGroup(complex));
 
 let sdk;
 export function loadMaps() {
@@ -49,10 +56,9 @@ function capped(items, limit, selectedId) {
 }
 
 function priceLabel(c) {
-  const group = c.groups.find(g => g.predictable) || c.groups[0];
+  const group = pricedGroup(c);
   const value = group.marker_price_manwon;
-  const price = value == null ? "가격 없음" :
-    (Number(value) / 10000).toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "억";
+  const price = (Number(value) / 10000).toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "억";
   return { price, detail: group.area_group + "㎡군 · " + (group.predictable ? "기준가격" : "최근 실거래"),
     ready: group.predictable };
 }
