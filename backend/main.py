@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Query
 from account_api import router
 from database import connect
 
-from math import expm1
+from math import exp, expm1
 from inference import HORIZONS, forecast, load_model, predict_growth
 
 
@@ -52,17 +52,27 @@ def list_complexes(include_sort: bool = False):
             SELECT complex_id, count(*) AS trade_count, max(contract_date) AS last_trade
             FROM trades WHERE NOT is_cancelled GROUP BY complex_id
         """)}
+        last_prices = {(r["complex_id"], r["area_group"]): r["price_manwon"] for r in db.execute("""
+            SELECT DISTINCT ON (complex_id, area_group) complex_id, area_group, price_manwon
+            FROM trades WHERE NOT is_cancelled
+            ORDER BY complex_id, area_group, contract_date DESC, trade_id DESC
+        """)}
         inputs = db.execute("""
             SELECT DISTINCT ON (complex_id) * FROM model_inputs
             WHERE month = (SELECT max(month) FROM model_inputs)
             ORDER BY complex_id, area_group
         """).fetchall()
+    reference_units = {(r["complex_id"], r["area_group"]): exp(r["log_current"]) for r in inputs}
     returns = {}
     if inputs:
         for row, rates in zip(inputs, predict_growth(app.state.model, inputs), strict=True):
             returns[row["complex_id"]] = dict(zip(HORIZONS, (100 * expm1(r) for r in rates), strict=True))
+    default_groups = {r["complex_id"]: r["area_group"] for r in inputs}
     for row in rows:
         cid = row["complex_id"]
+        key = cid, row["area_group"]
+        row["marker_price_manwon"] = (reference_units[key] * float(row["representative_area"])
+                                      if key in reference_units else last_prices.get(key))
         stat = stats.get(cid, {})
         row.update(trade_count=stat.get("trade_count", 0), last_trade=stat.get("last_trade"),
                    sort_returns=returns.get(cid, {}))

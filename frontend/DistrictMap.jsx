@@ -42,6 +42,31 @@ function capped(items, limit, selectedId) {
   return first;
 }
 
+function priceLabel(c) {
+  const group = c.groups.find(g => g.predictable) || c.groups[0];
+  const value = group.marker_price_manwon;
+  const price = value == null ? "가격 없음" :
+    (Number(value) / 10000).toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "억";
+  return { price, detail: group.area_group + "㎡군 · " + (group.predictable ? "기준가격" : "최근 실거래"),
+    ready: group.predictable };
+}
+
+function markerClass(label, selected) {
+  return "price-pin" + (label.ready ? " ready" : "") + (selected ? " selected" : "");
+}
+
+function markerContent(c, selected) {
+  const label = priceLabel(c);
+  const card = document.createElement("div");
+  card.className = markerClass(label, selected);
+  for (const [tag, text] of [["span", c.name], ["b", label.price], ["small", label.detail]]) {
+    const line = document.createElement(tag);
+    line.textContent = text;
+    card.appendChild(line);
+  }
+  return card.outerHTML;
+}
+
 export default function DistrictMap({ complexes, onSelect, selectedId }) {
   const [limit, setLimit] = useState(20);
   const container = useRef(null);
@@ -89,9 +114,7 @@ export default function DistrictMap({ complexes, onSelect, selectedId }) {
         const marker = new maps.Marker({
           map: instance.current, position: new maps.LatLng(c.latitude, c.longitude),
           title: c.name, zIndex: selectedId === c.complex_id ? 100 : 1,
-          icon: { content: '<span class="pin ' +
-            (selectedId === c.complex_id ? 'selected' : c.groups.some(g => g.predictable) ? 'ready' : '') +
-            '"></span>', anchor: new maps.Point(8, 8) }
+          icon: { content: markerContent(c, selectedId === c.complex_id), anchor: new maps.Point(60, 58) }
         });
         const listener = maps.Event.addListener(marker, "click", () => selectRef.current(c));
         return { marker, listener };
@@ -113,10 +136,12 @@ export default function DistrictMap({ complexes, onSelect, selectedId }) {
     <div ref={container} className="district-map" aria-label="광진구 단지 지도"/>
     {failure ? <div className="coordinate-map" aria-label="광진구 좌표 지도">
       <p>단지 위치도 · {failure}</p>
-      {capped(positioned.filter(c => c.longitude >= 127.05 && c.longitude <= 127.125 && c.latitude >= 37.521 && c.latitude <= 37.581), limit, selectedId).map(c => <button key={c.complex_id} title={c.name} aria-label={c.name}
-        className={"pin " + (selectedId === c.complex_id ? "selected" : c.groups.some(g => g.predictable) ? "ready" : "")}
+      {capped(positioned.filter(c => c.longitude >= 127.05 && c.longitude <= 127.125 && c.latitude >= 37.521 && c.latitude <= 37.581), limit, selectedId).map(c => {
+        const label = priceLabel(c);
+        return <button key={c.complex_id} title={c.name} aria-label={c.name}
+        className={markerClass(label, selectedId === c.complex_id)}
         style={{left: ((c.longitude - 127.05) / 0.075 * 100) + "%", top: ((37.581 - c.latitude) / 0.06 * 100) + "%"}}
-        onClick={() => onSelect(c)}/>)}
+        onClick={() => onSelect(c)}><span>{c.name}</span><b>{label.price}</b><small>{label.detail}</small></button>; })}
     </div>
       : !maps && <p className="map-status">지도를 불러오는 중입니다.</p>}
   </div></>;

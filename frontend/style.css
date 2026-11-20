@@ -58,3 +58,10 @@ thead th { color:#51645e; font-size:14px; }
 .compare-dialog table { width: 100%; min-width: 430px; }
 .compare-dialog th, .compare-dialog td { text-align: left; vertical-align: top; }
 .compare-dialog small { display: block; font-weight: normal; }
+.price-pin { display:grid; align-content:center; width:120px; height:58px; padding:3px 6px; border:1px solid #61716c; border-radius:5px; background:white; color:#334640; box-shadow:0 2px 5px #20372c30; text-align:center; line-height:1.2; cursor:pointer; }
+.price-pin.ready { border-color:#078158; color:#086547; }
+.price-pin.selected { outline:2px solid #ca6726; }
+.price-pin span { font-size:11px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.price-pin b { font-size:16px; }
+.price-pin small { font-size:10px; }
+.coordinate-map .price-pin { position:absolute; transform:translate(-50%,-100%); }
