@@ -1,5 +1,20 @@
 # 집핏 프로토타입
 
+## 로드맵 5단계 · 공개 서비스 통합 검증
+
+팀원 PC에서는 `git clone https://github.com/july0718/jipfit.git` 후 `cd jipfit`으로 이동해서 아래의 광진구 지도 버전 실행 절차를 따릅니다. 팀원 PC는 자체 DB와 로컬 화면으로 확인하고, 다음 공개 검사는 운영 DB를 사용하는 **서버 PC**에서 실행합니다. 프론트엔드는 main 푸시 후 GitHub Actions가 기존 Pages 프로젝트로 배포합니다.
+
+```powershell
+docker compose up -d --build --wait api web
+docker compose exec api python verify_service.py http://web
+docker compose exec api python verify_service.py https://jipfit-48v.pages.dev
+docker compose logs --tail 30 updater
+```
+
+검사기는 화면 파일·비로그인 응답·지도 좌표·전체 면적군 수, 예측 가능/불가 면적군 각각의 거래 이력, 3·6·12개월 API 전망, DB의 최근 수집 성공 시각과 상세 API 시각의 일치를 확인합니다. 수집을 실행하지 않은 신규 DB에서는 시각 대조를 완료할 수 없습니다. 운영 로그에서 가장 최근 예정된 한국시간 06시 작업이 성공했는지도 확인합니다.
+
+공개 화면에서는 별도의 검수 계정으로 회원가입 후 지도에서 단지를 선택하고, 다른 단지까지 비교에 담아 면적군과 전망 기간을 지정합니다. 관심 단지·비교 조합·메모를 저장하고 로그아웃한 뒤 재로그인합니다. 저장 조합을 열어 두 면적군·기간·메모가 복원되는지 확인합니다. 상세 화면의 거래 동기화 시각은 한국시간으로 표시되므로 검사 결과와 같은 시점인지 비교합니다.
+
 ## 광진구 지도 버전 실행
 
 Docker Desktop을 실행한 뒤 VSCode에서 compose.yaml이 들어 있는 jipfit 폴더를 엽니다. 처음 받은 폴더에서는 아래 명령으로 .env를 준비하고 POSTGRES_PASSWORD에 본인의 로컬 DB 비밀번호를 입력해 저장합니다.
