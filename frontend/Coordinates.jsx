@@ -3,7 +3,7 @@ import { loadMaps } from "./DistrictMap";
 import { exactAddressCandidates } from "./geocode-utils.cjs";
 
 // 추가 코드
-import allowedComplexIds from "./geocoding-allowlist.json";
+import allowedComplexIds from "./geocoding-pending439.json";
 
 const allowedIds = new Set(allowedComplexIds);
 // 주소 검색 결과 후보 중에서 정확히 일치하는 주소만 반환
@@ -16,6 +16,20 @@ export function cachedPoint(address) {
   } catch {}
   return null;
 }
+
+const pendingPrefix = "jipfit-geocode-pending439-v1:";
+
+function pendingPoint(address) {
+  try {
+    const p = JSON.parse(localStorage.getItem(pendingPrefix + address));
+    if (Number.isFinite(p?.latitude) && Number.isFinite(p?.longitude)) {
+      return p;
+    }
+  } catch {}
+  return null;
+}
+
+
 
 function lookup(service, address) {
   return new Promise((resolve, reject) => {
@@ -56,9 +70,12 @@ export default function Coordinates({ complexes, district, onChange }) {
       );
       for (const address of addresses) {
         if (stop.current) break;
-        const point = cachedPoint(address) || await lookup(service, address);
+        const point = pendingPoint(address) || await lookup(service, address);
         if (point) {
-          localStorage.setItem(prefix + address, JSON.stringify(point));
+          localStorage.setItem(
+            pendingPrefix + address,
+            JSON.stringify(point)
+          );
           found++;
         } else skipped++;
         setMessage(`${district || "전체 지역"} · ${found + skipped}/${addresses.size}개 주소 확인 · ${found}개 저장 · ${skipped}개 미확정`);
@@ -71,8 +88,14 @@ export default function Coordinates({ complexes, district, onChange }) {
   function download() {
     const coordinates = {};
     for (const c of scoped) {
-      const point = cachedPoint(c.address);
-      if (point) coordinates[c.complex_id] = { address: c.address, lat: point.latitude, lng: point.longitude };
+      const point = pendingPoint(c.address);
+      if (point) {
+        coordinates[c.complex_id] = {
+          address: c.address,
+          lat: point.latitude,
+          lng: point.longitude
+        };
+      }
     }
     if (!Object.keys(coordinates).length) return setMessage("내보낼 수집 좌표가 없습니다.");
     const url = URL.createObjectURL(new Blob([JSON.stringify({ schemaVersion: 1, coordinates })], { type: "application/json" }));
