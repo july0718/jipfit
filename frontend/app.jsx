@@ -37,7 +37,7 @@ function ComplexDetail({ id }) {
 
 function Results({ home, data }) {
   return <>
-    <h2>{home.name} <small>{data.representative_area}㎡</small></h2>
+    <h2>{home.name} <small>{home.representative_area}㎡</small></h2>
     <p>{home.address}</p>
     <div className="reference"><span>입력 기준월 {data.as_of} · 기준가</span><strong>{money(data.reference_price_manwon)}</strong></div>
     <table><caption>기간별 예측</caption><thead><tr>

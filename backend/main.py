@@ -82,20 +82,8 @@ def predict(complex_id: str = Query(min_length=1), area_group: int = Query(gt=0)
             as_of: str | None = Query(default=None, pattern=r"^[0-9]{4}-(0[1-9]|1[0-2])$")):
     with connect() as db:
         row = db.execute("""
-            SELECT m.*, COALESCE(history.area, a.representative_area) AS representative_area
+            SELECT m.*, a.representative_area
             FROM model_inputs m JOIN area_groups a USING (complex_id, area_group)
-            LEFT JOIN LATERAL (
-                -- Match build_inputs: median of monthly areas in the 12 eligible months.
-                SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY monthly.area) AS area
-                FROM (
-                    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY t.area) AS area
-                    FROM trades t
-                    WHERE t.complex_id = m.complex_id AND t.area_group = m.area_group
-                      AND t.contract_date >= (m.month || '-01')::date - interval '13 months'
-                      AND t.contract_date < (m.month || '-01')::date - interval '1 month'
-                    GROUP BY date_trunc('month', t.contract_date)
-                ) monthly
-            ) history ON true
             WHERE m.complex_id = %s AND m.area_group = %s
               AND m.month = COALESCE(%s, (SELECT max(month) FROM model_inputs))
             ORDER BY m.month DESC LIMIT 1
