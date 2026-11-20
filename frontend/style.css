@@ -50,7 +50,7 @@ thead th { color:#51645e; font-size:14px; }
 .trade-history td:first-child { text-align:left; }
 .trade-history button { margin-top:8px; }
 .price-chart { margin: 1.25rem 0; } .price-chart figcaption { font-weight: 650; } .price-chart svg { display: block; width: 100%; max-width: 42rem; } .price-chart text { fill: #41565a; font-size: 12px; }
-.open-compare { margin-left: auto; }
+.open-compare { margin-left: auto; color:#123e36; background:#fff; }
 .compare-dialog { width: min(740px, 94vw); max-height: 88vh; padding: clamp(16px, 3vw, 30px); border: 0; border-radius: 14px; color: #172f2b; }
 .compare-dialog::backdrop { background: rgb(10 28 24 / 48%); }
 .compare-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
