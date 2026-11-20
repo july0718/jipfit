@@ -53,11 +53,10 @@ export default function Coordinates({ complexes, district, onChange }) {
         scoped
           .filter(c => c.latitude == null || c.longitude == null)
           .map(c => c.address)
-          .slice(0, 20)
       );
       for (const address of addresses) {
         if (stop.current) break;
-        const point = await lookup(service, address);
+        const point = cachedPoint(address) || await lookup(service, address);
         if (point) {
           localStorage.setItem(prefix + address, JSON.stringify(point));
           found++;
