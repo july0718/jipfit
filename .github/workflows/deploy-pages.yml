@@ -1,0 +1,45 @@
+name: Deploy Jipfit to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jipfit-pages-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 저장소 코드 받기
+        uses: actions/checkout@v4
+
+      - name: Node.js 준비
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: React 빌드 및 Pages 배포 폴더 준비
+        working-directory: frontend
+        run: |
+          npm install --include=dev --no-audit --no-fund
+          npm run build
+          cp index.html style.css config.js _worker.js dist/
+
+      - name: 기존 Cloudflare Pages 프로젝트에 배포
+        working-directory: ${{ runner.temp }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+        run: |
+          npx --yes wrangler@4.165.0 pages deploy "$GITHUB_WORKSPACE/frontend/dist" \
+            --project-name "$PAGES_PROJECT" \
+            --branch main \
+            --commit-hash "$GITHUB_SHA"
