@@ -140,3 +140,18 @@ docker compose exec api python verify_service.py http://web --district 11200
 ```
 
 성동구 전망에는 성동구 매매가격지수와 광진구에서 학습한 모델을 사용합니다. 지역별 오차 검증은 6-3에서 수행합니다. 기존 학습 산출물의 입력 이름을 유지하면서 지수 값은 요청한 지역에 맞춰 생성합니다. 좌표가 없는 성동구 단지는 목록에서 조회하며, 행당동 380 서울숲리버뷰자이는 주소 일치 시 확인된 대표 좌표를 연결합니다. 지도·목록으로 광진구와 성동구 후보를 한 개씩 담아 비교 창에서 각 단지의 기준월과 3·6·12개월 전망을 확인합니다.
+
+### 6-3 광진구·성동구 예측 모델 비교
+
+저장소 루트에서 실행하면 성동구 월별 실거래를 수집하고 두 구의 과거 자료로 모델을 다시 학습한다. 중간에 수집이 끊기면 같은 명령으로 이어받을 수 있다.
+
+```powershell
+$auditDir = Join-Path $env:LOCALAPPDATA 'jipfit-district-audit'
+New-Item -ItemType Directory -Force $auditDir | Out-Null
+docker compose --profile updates build updater
+docker compose --profile updates run --rm --no-deps -v "${auditDir}:/audit" updater python -u evaluate_districts.py --cache /audit
+```
+
+검증 기준월은 2025년 4~9월이다. 2025년 4월 시점에 관측 가능한 목표값으로 학습한 뒤 같은 단지·면적군·기준월에서 광진구 학습 모델, 두 구 통합 모델, 성동구 전용 모델, 가격 유지 기준을 비교한다. 실거래 공시 시차는 2개월로 가정한다. 성동구 지수는 지역별 매매가격지수 원자료의 성동구 열을 사용하고 공개 시점은 같은 통계의 광진구 일정과 맞췄다. 과거 거래는 현재 확보한 이력으로 재구성하므로 당시의 신고·정정 상태까지 재현하지는 않는다.
+
+결과 폴더의 `district_scores.csv`에 구·기간별 평가 표본 수, 상승률 MAE와 평균 편향(%p)이 기록된다. `district_coverage.csv`에는 수집 기간 내 확인된 단지·면적군 중 기준월별 예측 입력을 만들 수 있는 비율이 기록된다. 출력된 후보는 여섯 기준월에 대한 잠정 결론이며 운영 모델을 교체하려면 별도 기간에서도 확인해야 한다.
