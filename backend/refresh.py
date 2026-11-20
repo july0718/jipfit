@@ -21,7 +21,7 @@ KST = timezone(timedelta(hours=9))
 FIELDS = "complex_id,area_group,contract_date,area,floor,price_manwon,is_cancelled"
 
 
-def reconcile(db, month, complexes, wanted, district):
+def reconcile(db, month, complexes, wanted, district, *, history=False):
     first = month.start_time.date()
     end = (month + 1).start_time.date()
     with db.cursor() as cur:
@@ -42,6 +42,8 @@ def reconcile(db, month, complexes, wanted, district):
         if existing and not wanted:
             raise ValueError("Empty API month would remove existing trades")
         counts = Counter({k: len(ids) for k, ids in existing.items()})
+        if history and (counts - wanted):
+            raise ValueError(f"{district} {month}: existing trades differ from API; month rolled back")
         removed = [id_ for k, ids in existing.items() if not k[-1] for id_ in ids[wanted[k]:]]
         if removed:
             cur.execute("DELETE FROM trades WHERE trade_id = ANY(%s)", (removed,))
@@ -69,12 +71,12 @@ def publish(db, anchor, macro_path, district):
     return len(inputs)
 
 
-def refresh(district):
+def refresh(district, temp):
     if not os.environ.get("MOLIT_SERVICE_KEY"):
         raise ValueError("MOLIT_SERVICE_KEY is required")
     today = datetime.now(KST).date()
     anchor = pd.Period(today, freq="M")
-    with psycopg.connect(connect_timeout=8) as db, tempfile.TemporaryDirectory() as temp:
+    with psycopg.connect(connect_timeout=8) as db:
         with db.transaction():
             db.execute((ROOT/"db/trade_status.sql").read_text(encoding="utf-8"))
             db.execute((ROOT/"db/regions.sql").read_text(encoding="utf-8"))
@@ -97,7 +99,7 @@ def refresh(district):
             a, r = reconcile(db, month, complexes, rows, district)
             added += a
             removed += r
-        subprocess.run([sys.executable, str(ROOT/"fetch_macro.py"), "--refresh", "--district", district, "--end-month", str(anchor-1)],
+        subprocess.run([sys.executable, str(ROOT/"fetch_macro.py"), "--district", district, "--end-month", str(anchor-1)],
                        cwd=temp, check=True)
         n = publish(db, anchor, Path(temp)/"macro_raw.csv", district)
         if district == "11200":
@@ -115,19 +117,19 @@ def main():
     parser.add_argument("--district", choices=DISTRICTS)
     args = parser.parse_args()
     districts = [args.district] if args.district else list(DISTRICTS)
-    if args.once:
-        for district in districts:
-            refresh(district)
-        return
     while True:
-        failed = False
-        for district in districts:
-            try:
-                refresh(district)
-            except Exception as exc:
-                # Network errors can contain the credentialed request URL.
-                failed = True
-                print(f"{district} refresh failed ({type(exc).__name__}); retry in one hour.", flush=True)
+        failed = []
+        with tempfile.TemporaryDirectory() as temp:
+            for district in districts:
+                try:
+                    refresh(district, temp)
+                except Exception as exc:
+                    failed.append(district)
+                    print(f"{district} update failed ({type(exc).__name__}): check source availability and credentials.", flush=True)
+        if args.once:
+            if failed:
+                raise SystemExit("Failed districts: " + ", ".join(failed))
+            return
         if failed:
             clock.sleep(3600)
         else:

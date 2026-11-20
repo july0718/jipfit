@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 
 let sdk;
-function loadMaps() {
+export function loadMaps() {
   if (window.naver?.maps?.Map) return Promise.resolve(window.naver.maps);
   if (!sdk) {
     sdk = new Promise((resolve, reject) => {
@@ -24,7 +24,7 @@ function loadMaps() {
         }
       }
       script.src = "https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=" +
-        encodeURIComponent(window.NAVER_MAP_CLIENT_ID);
+        encodeURIComponent(window.NAVER_MAP_CLIENT_ID) + "&submodules=geocoder";
       script.onload = checkReady;
       script.onerror = () => fail("지도 스크립트 연결 실패");
       poll = setInterval(checkReady, 50);
@@ -67,10 +67,16 @@ function markerContent(c, selected) {
   return card.outerHTML;
 }
 
-export default function DistrictMap({ district, complexes, onSelect, selectedId }) {
-  const lat = district === "광진구" ? 37.546 : 37.553;
-  const lng = district === "광진구" ? 127.086 : district === "성동구" ? 127.042 : 127.065;
-  const width = district ? 0.075 : 0.145;
+export default function DistrictMap({ district, allComplexes, complexes, onSelect, selectedId }) {
+  const center = React.useMemo(() => {
+    const points = allComplexes.filter(c => c.latitude != null && c.longitude != null && c.address.split(" ")[1] === district);
+    if (!points.length) return [37.5665, 126.978];
+    return [points.reduce((s,c) => s + Number(c.latitude), 0) / points.length,
+            points.reduce((s,c) => s + Number(c.longitude), 0) / points.length];
+  }, [district, allComplexes]);
+  const [lat, lng] = center;
+  const width = district ? 0.12 : 0.65;
+  const height = district ? 0.09 : 0.42;
   const [limit, setLimit] = useState(20);
   const container = useRef(null);
   const instance = useRef(null);
@@ -91,11 +97,11 @@ export default function DistrictMap({ district, complexes, onSelect, selectedId 
   useEffect(() => {
     if (!maps) return;
     const map = new maps.Map(container.current, {
-      center: new maps.LatLng(lat, lng), zoom: district ? 13 : 12, zoomControl: true
+      center: new maps.LatLng(lat, lng), zoom: district ? 13 : 11, zoomControl: true
     });
     instance.current = map;
     return () => { instance.current = null; map.destroy?.(); };
-  }, [maps, district]);
+  }, [maps, district, lat, lng]);
   useEffect(() => {
     if (!instance.current) return;
     const map = instance.current;
@@ -126,7 +132,7 @@ export default function DistrictMap({ district, complexes, onSelect, selectedId 
     const idle = maps.Event.addListener(map, "idle", redraw);
     redraw();
     return () => { maps.Event.removeListener(idle); clear(); };
-  }, [maps, complexes, selectedId, limit, district]);
+  }, [maps, complexes, selectedId, limit, district, lat, lng]);
   useEffect(() => {
     const c = complexes.find(item => item.complex_id === selectedId);
     if (instance.current && c?.latitude != null && c.longitude != null)
@@ -139,11 +145,11 @@ export default function DistrictMap({ district, complexes, onSelect, selectedId 
     <div ref={container} className="district-map" aria-label="단지 지도"/>
     {failure ? <div className="coordinate-map" aria-label="단지 좌표 지도">
       <p>단지 위치도 · {failure}</p>
-      {capped(positioned.filter(c => Math.abs(c.longitude-lng) <= width/2 && Math.abs(c.latitude-lat) <= 0.035), limit, selectedId).map(c => {
+      {capped(positioned.filter(c => Math.abs(c.longitude-lng) <= width/2 && Math.abs(c.latitude-lat) <= height/2), limit, selectedId).map(c => {
         const label = priceLabel(c);
         return <button key={c.complex_id} title={c.name} aria-label={c.name}
         className={markerClass(label, selectedId === c.complex_id)}
-        style={{left: ((c.longitude - lng + width/2) / width * 100) + "%", top: ((lat + 0.035 - c.latitude) / 0.07 * 100) + "%"}}
+        style={{left: ((c.longitude - lng + width/2) / width * 100) + "%", top: ((lat + height/2 - c.latitude) / height * 100) + "%"}}
         onClick={() => onSelect(c)}><span>{c.name}</span><b>{label.price}</b><small>{label.detail}</small></button>; })}
     </div>
       : !maps && <p className="map-status">지도를 불러오는 중입니다.</p>}

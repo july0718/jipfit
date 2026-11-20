@@ -26,13 +26,19 @@ export default {
       headers.set("Content-Type","application/json");
       headers.set("X-Jipfit-Action","1");
     }
+    let origin;
     try {
-      const origin = new URL(env.API_ORIGIN);
+      origin = new URL(env.API_ORIGIN);
       if (origin.protocol !== "https:" || origin.host === url.host) throw new Error();
+    } catch {
+      return error("공개 사이트의 API_ORIGIN 설정을 확인해 주세요.", 503);
+    }
+    try {
       const response = await fetch(new URL(url.pathname + url.search, origin.origin), {
         headers, method: request.method, body: post ? request.body : undefined, redirect: "manual", cache: "no-store"
       });
-      if (!response.headers.get("content-type")?.includes("application/json")) throw new Error();
+      if (!response.headers.get("content-type")?.includes("application/json"))
+        return error(`예측 서버 대신 다른 응답을 받았습니다 (HTTP ${response.status}). 터널 연결을 확인해 주세요.`, 502);
       const out = new Headers({"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});
       const cookie = response.headers.get("Set-Cookie");
       if (account && cookie?.startsWith("jipfit_session=")) out.set("Set-Cookie",cookie);

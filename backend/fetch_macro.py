@@ -35,7 +35,8 @@ def download(url, filename, refresh=False):
     if refresh or not target.exists():
         request = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(request, timeout=90) as response:
-            target.write_bytes(response.read())
+            payload = response.read()
+            target.write_bytes(payload)
     return target.read_bytes()
 
 
@@ -83,7 +84,7 @@ def extract_index(workbook_bytes, district):
     sheet.reset_dimensions()
     rows = list(sheet.iter_rows(values_only=True))
     header = next(row for row in rows if any(re.fullmatch(r'\d{4}년\s*\d{1,2}월', str(c or '')) for c in row))
-    candidates = [row for row in rows if len(row) > 4 and tuple(row[:4]) == ('서울', '강북지역', '동북권', DISTRICTS[district])]
+    candidates = [row for row in rows if len(row) > 4 and row[0] == '서울' and row[3] == DISTRICTS[district]]
     if len(candidates) != 1:
         raise ValueError(f'Expected one Gwangjin raw apartment-index row, found {len(candidates)}.')
     target = candidates[0]
@@ -187,7 +188,7 @@ def main():
             'latest_posted_at': metadata['userDttm'],
             'archive_member': member,
             'sheet': sheet_name,
-            'region_row': ['서울', '강북지역', '동북권', DISTRICTS[args.district]],
+            'region_row': ['서울', DISTRICTS[args.district]],
             'series_type': 'Monthly apartment sale price survey index, raw/unadjusted series; not transaction-price index.',
             'start_month': '%04d-%02d' % first_index,
             'end_month': '%04d-%02d' % last_index,

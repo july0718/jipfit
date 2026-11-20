@@ -36,16 +36,23 @@ async def validation_error(request, exc):
     return await request_validation_exception_handler(request, exc)
 
 
+@app.get("/api/health")
+def health():
+    with connect() as db:
+        db.execute("SELECT 1")
+    return {"status": "ok"}
+
+
 @app.get("/api/complexes")
 def list_complexes(include_sort: bool = False):
     with connect() as db:
         rows = db.execute("""
             SELECT c.complex_id, c.name, c.address, c.latitude, c.longitude,
                    a.area_group, a.representative_area,
-                   EXISTS (SELECT 1 FROM model_inputs m
-                           WHERE m.month = (SELECT d.month FROM district_input_months d WHERE d.district=split_part(m.complex_id,' ',2))
-                             AND (m.complex_id, m.area_group) = (a.complex_id, a.area_group)) AS predictable
+                   (m.complex_id IS NOT NULL) AS predictable
             FROM complexes c JOIN area_groups a USING (complex_id)
+            LEFT JOIN district_input_months d ON d.district=split_part(c.complex_id,' ',2)
+            LEFT JOIN model_inputs m ON m.complex_id=c.complex_id AND m.area_group=a.area_group AND m.month=d.month
             ORDER BY c.name, c.complex_id, a.area_group
         """).fetchall()
         if not include_sort:
