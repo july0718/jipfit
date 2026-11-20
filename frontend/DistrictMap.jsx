@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import pendingCoordinateReviewIds from "./geocoding-pending439.json";
+import pendingCoordinateReviewIds from "./map-unverified-complexes.json";
 
 // Coordinates can be archived without marking a complex as currently existing.
 // Hide unverified complexes from map markers until existence status is adjudicated.
