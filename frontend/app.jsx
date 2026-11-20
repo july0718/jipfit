@@ -82,6 +82,57 @@ function TradeHistory({ complexId, areaGroup }) {
   </section>;
 }
 
+function ComparisonRow({ item, months }) {
+  const [summary, setSummary] = useState(null);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({ complex_id: item.complex_id, area_group: item.area_group });
+    const read = path => readApi(path + "?" + params, controller.signal);
+    setError("");
+    Promise.all([read("/api/trades"), item.predictable ? read("/api/predict") : null])
+      .then(([rows, forecast]) => {
+        if (!controller.signal.aborted) setSummary({ latest: rows.find(r => !r.is_cancelled), forecast });
+      }).catch(err => { if (!controller.signal.aborted) setError(err.message); });
+    return () => controller.abort();
+  }, [item, attempt]);
+  const f = summary?.forecast?.forecasts.find(f => f.months === months);
+  const latest = summary?.latest;
+  return <tr><th scope="row">{item.name} · {item.area_group}㎡군</th>
+    {error ? <td colSpan="4">{error} <button onClick={() => setAttempt(n => n+1)}>다시 조회</button></td>
+      : !summary ? <td colSpan="4">조회 중…</td> : <>
+        <td>{latest ? latest.contract_date + " · " + money(latest.price_manwon) : "거래 없음"}</td>
+        <td>{summary.forecast ? money(summary.forecast.reference_price_manwon) : "예측 없음"}</td>
+        <td>{f ? money(f.price_manwon) : "—"}</td><td>{f ? percent.format(f.return_percent) + "%" : "—"}</td></>}
+  </tr>;
+}
+
+function Comparison({ home, complexes }) {
+  const [otherId, setOtherId] = useState("");
+  const [area, setArea] = useState("");
+  const [months, setMonths] = useState(3);
+  const choices = complexes.filter(c => c.complex_id !== home.complex_id);
+  const other = choices.find(c => c.complex_id === otherId);
+  const group = other?.groups.find(g => String(g.area_group) === area)
+    || other?.groups.find(g => g.predictable) || other?.groups[0];
+  return <section className="panel"><h2>두 단지 비교</h2>
+    <p>선택 단지 · {home.name} {home.area_group}㎡군</p>
+    <label>비교할 단지<select value={other?.complex_id || ""} onChange={e => { setOtherId(e.target.value); setArea(""); }}>
+      <option value="">단지 선택</option>{choices.map(c => <option key={c.complex_id} value={c.complex_id}>{c.name} · {c.address}</option>)}
+    </select></label>
+    {group && <><label>비교 단지 면적군<select value={group.area_group} onChange={e => setArea(e.target.value)}>
+      {other.groups.map(g => <option key={g.area_group} value={g.area_group}>{g.area_group}㎡군</option>)}</select></label>
+      <label>공통 전망 기간<select value={months} onChange={e => setMonths(Number(e.target.value))}>
+        {[3,6,12].map(m => <option key={m} value={m}>{m}개월</option>)}</select></label>
+      <div style={{overflowX:"auto"}}><table><caption>{months}개월 전망 비교</caption><thead><tr>
+        <th>단지·면적군</th><th>최근 유효 거래</th><th>기준가격</th><th>예상가격</th><th>예상 상승률</th>
+      </tr></thead><tbody>{[home, group].map(item =>
+        <ComparisonRow key={JSON.stringify([item.complex_id,item.area_group])} item={item} months={months}/>
+      )}</tbody></table></div></>}
+  </section>;
+}
+
 function App() {
   const [homes, setHomes] = useState(null);
   const [listError, setListError] = useState("");
@@ -190,7 +241,7 @@ function App() {
         {home && <TradeHistory key={JSON.stringify([home.complex_id, home.area_group])}
           complexId={home.complex_id} areaGroup={home.area_group}/>}
       </section>
-    </div></main>
+    </div>{home && <Comparison home={home} complexes={complexes}/>}</main>
   </>;
 }
 

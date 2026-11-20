@@ -34,7 +34,16 @@ function loadMaps() {
   return sdk;
 }
 
+function capped(items, limit, selectedId) {
+  if (items.length <= limit) return items;
+  const first = items.slice(0, limit);
+  const selected = items.find(c => c.complex_id === selectedId);
+  if (selected && !first.includes(selected)) first[first.length - 1] = selected;
+  return first;
+}
+
 export default function DistrictMap({ complexes, onSelect, selectedId }) {
+  const [limit, setLimit] = useState(20);
   const container = useRef(null);
   const instance = useRef(null);
   const selectRef = useRef(onSelect);
@@ -61,38 +70,56 @@ export default function DistrictMap({ complexes, onSelect, selectedId }) {
   }, [maps]);
   useEffect(() => {
     if (!instance.current) return;
-    const markers = complexes.filter(c => c.latitude != null && c.longitude != null).map(c => {
-      const marker = new maps.Marker({
-        map: instance.current, position: new maps.LatLng(c.latitude, c.longitude),
-        title: c.name, zIndex: selectedId === c.complex_id ? 100 : 1,
-        icon: { content: '<span class="pin ' +
-          (selectedId === c.complex_id ? 'selected' : c.groups.some(g => g.predictable) ? 'ready' : '') +
-          '"></span>', anchor: new maps.Point(8, 8) }
+    const map = instance.current;
+    let markers = [];
+    function clear() {
+      markers.forEach(({ marker, listener }) => {
+        maps.Event.removeListener(listener);
+        marker.setMap(null);
       });
-      const listener = maps.Event.addListener(marker, "click", () => selectRef.current(c));
-      return { marker, listener };
-    });
-    return () => markers.forEach(({ marker, listener }) => {
-      maps.Event.removeListener(listener); marker.setMap(null);
-    });
-  }, [maps, complexes, selectedId]);
+      markers = [];
+    }
+    function redraw() {
+      const bounds = map.getBounds();
+      if (!bounds) return;
+      clear();
+      const inside = complexes.filter(c => c.latitude != null && c.longitude != null &&
+        bounds.hasLatLng(new maps.LatLng(c.latitude, c.longitude)));
+      markers = capped(inside, limit, selectedId).map(c => {
+        const marker = new maps.Marker({
+          map: instance.current, position: new maps.LatLng(c.latitude, c.longitude),
+          title: c.name, zIndex: selectedId === c.complex_id ? 100 : 1,
+          icon: { content: '<span class="pin ' +
+            (selectedId === c.complex_id ? 'selected' : c.groups.some(g => g.predictable) ? 'ready' : '') +
+            '"></span>', anchor: new maps.Point(8, 8) }
+        });
+        const listener = maps.Event.addListener(marker, "click", () => selectRef.current(c));
+        return { marker, listener };
+      });
+    }
+    const idle = maps.Event.addListener(map, "idle", redraw);
+    redraw();
+    return () => { maps.Event.removeListener(idle); clear(); };
+  }, [maps, complexes, selectedId, limit]);
   useEffect(() => {
     const c = complexes.find(item => item.complex_id === selectedId);
     if (instance.current && c?.latitude != null && c.longitude != null)
       instance.current.panTo(new maps.LatLng(c.latitude, c.longitude));
   }, [selectedId, maps, complexes]);
   const positioned = complexes.filter(c => c.latitude != null && c.longitude != null);
-  return <div className="map-box">
+  return <><label>현재 지도 범위의 마커<select value={limit} onChange={e => setLimit(Number(e.target.value))}>
+    <option value={20}>20개</option><option value={100}>100개</option><option value={Infinity}>전체</option>
+  </select></label><div className="map-box">
     <div ref={container} className="district-map" aria-label="광진구 단지 지도"/>
     {failure ? <div className="coordinate-map" aria-label="광진구 좌표 지도">
       <p>단지 위치도 · {failure}</p>
-      {positioned.map(c => <button key={c.complex_id} title={c.name} aria-label={c.name}
+      {capped(positioned.filter(c => c.longitude >= 127.05 && c.longitude <= 127.125 && c.latitude >= 37.521 && c.latitude <= 37.581), limit, selectedId).map(c => <button key={c.complex_id} title={c.name} aria-label={c.name}
         className={"pin " + (selectedId === c.complex_id ? "selected" : c.groups.some(g => g.predictable) ? "ready" : "")}
         style={{left: ((c.longitude - 127.05) / 0.075 * 100) + "%", top: ((37.581 - c.latitude) / 0.06 * 100) + "%"}}
         onClick={() => onSelect(c)}/>)}
     </div>
       : !maps && <p className="map-status">지도를 불러오는 중입니다.</p>}
-  </div>;
+  </div></>;
 }
 
 
