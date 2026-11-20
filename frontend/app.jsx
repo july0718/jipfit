@@ -82,55 +82,55 @@ function TradeHistory({ complexId, areaGroup }) {
   </section>;
 }
 
-function ComparisonRow({ item, months }) {
-  const [summary, setSummary] = useState(null);
-  const [error, setError] = useState("");
+function useComparedHome(item) {
+  const [result, setResult] = useState(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
+    if (!item) return;
     const controller = new AbortController();
     const params = new URLSearchParams({ complex_id: item.complex_id, area_group: item.area_group });
     const read = path => readApi(path + "?" + params, controller.signal);
-    setError("");
-    Promise.all([read("/api/trades"), item.predictable ? read("/api/predict") : null])
-      .then(([rows, forecast]) => {
-        if (!controller.signal.aborted) setSummary({ latest: rows.find(r => !r.is_cancelled), forecast });
-      }).catch(err => { if (!controller.signal.aborted) setError(err.message); });
+    Promise.all([read("/api/trades"), read("/api/complex"), item.predictable ? read("/api/predict") : null])
+      .then(([rows, detail, forecast]) => {
+        const trades = rows.filter(r => !r.is_cancelled);
+        if (!controller.signal.aborted) setResult({ item, attempt, detail, forecast, count: trades.length, latest: trades[0] });
+      }).catch(err => {
+        if (!controller.signal.aborted) setResult({ item, attempt, error: err.message });
+      });
     return () => controller.abort();
   }, [item, attempt]);
-  const f = summary?.forecast?.forecasts.find(f => f.months === months);
-  const latest = summary?.latest;
-  return <tr><th scope="row">{item.name} · {item.area_group}㎡군</th>
-    {error ? <td colSpan="4">{error} <button onClick={() => setAttempt(n => n+1)}>다시 조회</button></td>
-      : !summary ? <td colSpan="4">조회 중…</td> : <>
-        <td>{latest ? latest.contract_date + " · " + money(latest.price_manwon) : "거래 없음"}</td>
-        <td>{summary.forecast ? money(summary.forecast.reference_price_manwon) : "예측 없음"}</td>
-        <td>{f ? money(f.price_manwon) : "—"}</td><td>{f ? percent.format(f.return_percent) + "%" : "—"}</td></>}
-  </tr>;
+  return { item, data: result?.item === item && result?.attempt === attempt ? result : null,
+    retry: () => setAttempt(n => n + 1) };
 }
 
-function Comparison({ home, complexes }) {
-  const [otherId, setOtherId] = useState("");
-  const [area, setArea] = useState("");
-  const [months, setMonths] = useState(3);
-  const choices = complexes.filter(c => c.complex_id !== home.complex_id);
-  const other = choices.find(c => c.complex_id === otherId);
-  const group = other?.groups.find(g => String(g.area_group) === area)
-    || other?.groups.find(g => g.predictable) || other?.groups[0];
-  return <section className="panel"><h2>두 단지 비교</h2>
-    <p>선택 단지 · {home.name} {home.area_group}㎡군</p>
-    <label>비교할 단지<select value={other?.complex_id || ""} onChange={e => { setOtherId(e.target.value); setArea(""); }}>
-      <option value="">단지 선택</option>{choices.map(c => <option key={c.complex_id} value={c.complex_id}>{c.name} · {c.address}</option>)}
-    </select></label>
-    {group && <><label>비교 단지 면적군<select value={group.area_group} onChange={e => setArea(e.target.value)}>
-      {other.groups.map(g => <option key={g.area_group} value={g.area_group}>{g.area_group}㎡군</option>)}</select></label>
-      <label>공통 전망 기간<select value={months} onChange={e => setMonths(Number(e.target.value))}>
+function Comparison({ items, months, setMonths, remove, close }) {
+  const dialog = useRef(null);
+  const columns = [useComparedHome(items[0]), useComparedHome(items[1])];
+  useEffect(() => { dialog.current.showModal(); }, []);
+  const fields = [
+    ["전용면적군", d => d.item.area_group + "㎡군"],
+    ["모델 대표면적", d => d.forecast ? d.forecast.representative_area + "㎡" : "—"],
+    ["준공연도", d => d.detail.built + "년"],
+    ["현재 기준가격", d => d.forecast ? money(d.forecast.reference_price_manwon) : "산정값 없음"],
+    [months + "개월 후 예상가격", (_, f) => f ? money(f.price_manwon) : "예측 없음"],
+    ["예상 가격상승률", (_, f) => f ? percent.format(f.return_percent) + "%" : "—"],
+    ["예상 차익", (d, f) => f ? money(f.price_manwon - d.forecast.reference_price_manwon) : "—"],
+    ["이 면적군 유효 거래", d => d.count.toLocaleString("ko-KR") + "건"],
+    ["최근 실거래", d => d.latest ? <>{money(d.latest.price_manwon)}<small>{d.latest.contract_date} · {d.latest.area}㎡ · {d.latest.floor ?? "미상"}층</small></> : "거래 없음"]
+  ];
+  return <dialog ref={dialog} className="compare-dialog" aria-labelledby="compare-title" onClose={close}>
+    <div className="compare-heading"><h2 id="compare-title">단지 비교</h2><button onClick={() => dialog.current.close()}>닫기</button></div>
+    {items.length === 0 ? <p>지도나 목록에서 단지와 면적군을 선택한 뒤 ‘이 면적군으로 비교에 담기’를 누르세요.</p> : <>
+      <label>같은 예측 기간으로 보기<select value={months} onChange={e => setMonths(Number(e.target.value))}>
         {[3,6,12].map(m => <option key={m} value={m}>{m}개월</option>)}</select></label>
-      <div style={{overflowX:"auto"}}><table><caption>{months}개월 전망 비교</caption><thead><tr>
-        <th>단지·면적군</th><th>최근 유효 거래</th><th>기준가격</th><th>예상가격</th><th>예상 상승률</th>
-      </tr></thead><tbody>{[home, group].map(item =>
-        <ComparisonRow key={JSON.stringify([item.complex_id,item.area_group])} item={item} months={months}/>
-      )}</tbody></table></div></>}
-  </section>;
+      <div className="compare-scroll"><table><thead><tr><th>비교 항목</th>{columns.map(({item,data,retry}, i) =>
+        <th key={i}>{item ? <>{item.name}<small>{item.address}</small><button onClick={() => remove(item)}>비교에서 빼기</button>
+          {data?.error && <small role="alert">{data.error} <button onClick={retry}>다시 조회</button></small>}</> : "두 번째 후보"}</th>
+      )}</tr></thead><tbody>{fields.map(([label, value]) => <tr key={label}><th scope="row">{label}</th>
+        {columns.map(({item,data}, i) => <td key={i}>{!item || data?.error ? "—" : !data ? "조회 중…" :
+          value(data, data.forecast?.forecasts.find(f => f.months === months))}</td>)}</tr>)}</tbody></table></div>
+      <small>예상 차익은 기준가격 대비 변화이며 거래 비용은 포함하지 않습니다.</small></>}
+  </dialog>;
 }
 
 function App() {
@@ -140,6 +140,21 @@ function App() {
   const [home, setHome] = useState(null);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [compared, setCompared] = useState([]);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [notice, setNotice] = useState("");
+  const saved = compared.find(item => item.complex_id === home?.complex_id);
+  function removeCompared(item) {
+    setCompared(previous => previous.filter(c => c.complex_id !== item.complex_id));
+    setNotice(item.name + "을 비교에서 뺐습니다.");
+  }
+  function toggleCompared() {
+    if (saved?.area_group === home.area_group) return removeCompared(home);
+    if (saved) setCompared(previous => previous.map(c => c.complex_id === home.complex_id ? home : c));
+    else if (compared.length < 2) setCompared(previous => [...previous, home]);
+    else { setNotice("최대 두 단지를 비교합니다. 비교 창에서 한 단지를 빼 주세요."); return; }
+    setNotice(home.name + " " + home.area_group + "㎡군을 비교에 담았습니다.");
+  }
   const pending = useRef(null);
 
   const [query, setQuery] = useState("");
@@ -202,7 +217,8 @@ function App() {
   }
 
   return <>
-    <header><div className="brand">집핏</div><span>광진구 아파트</span></header>
+    <header><div className="brand">집핏</div><span>광진구 아파트</span><button className="open-compare" onClick={() => setCompareOpen(true)}>단지 비교 ({compared.length}/2)</button></header>
+    {compareOpen && <Comparison items={compared} months={horizon} setMonths={setHorizon} remove={removeCompared} close={() => setCompareOpen(false)}/>}
     <main><h1>아파트 매매가 예측</h1><Account home={home} homes={homes} onSelect={select}/><DistrictMap complexes={visible} onSelect={selectComplex} selectedId={home?.complex_id}/>
       <p className="map-key">초록색은 예측 가능한 단지, 회색은 실거래만 있는 단지입니다.</p>
       <div className="layout">
@@ -233,6 +249,9 @@ function App() {
               {g.area_group}㎡ · 대표 {g.representative_area}㎡{g.predictable ? "" : " · 예측 입력 없음"}
             </option>)}
           </select></label>}
+        {home && <button onClick={toggleCompared}>{!saved ? "이 면적군으로 비교에 담기" :
+          saved.area_group === home.area_group ? "비교에서 이 단지 빼기" : "비교 면적군을 현재 선택으로 변경"}</button>}
+        {notice && <p role="status">{notice}</p>}
         {home && !home.predictable ? <><h2>{home.name}</h2><p>이 면적군에는 예측에 필요한 월별 입력이 없습니다.</p></>
           : data ? <Results home={home} data={data}/>
           : error ? <><h2>예측 요청 실패</h2><p>{error}</p><button onClick={() => select(home)}>다시 예측</button></>
@@ -241,7 +260,7 @@ function App() {
         {home && <TradeHistory key={JSON.stringify([home.complex_id, home.area_group])}
           complexId={home.complex_id} areaGroup={home.area_group}/>}
       </section>
-    </div>{home && <Comparison home={home} complexes={complexes}/>}</main>
+    </div></main>
   </>;
 }
 
