@@ -25,7 +25,7 @@ def explain_difference(reference, result, prices, forecast):
     print(f"Expected: {prices[forecast['months']]:.8f}, API: {forecast['price_manwon']:.8f} manwon")
 
 
-def validate(base_url):
+def shipped_reference():
     inputs = read_rows(ROOT / "db/gwangjin/inputs.csv")
     months = {row["month"] for row in inputs}
     if len(months) != 1:
@@ -37,6 +37,32 @@ def validate(base_url):
     if expected.keys() != {(row["complex_id"], row["area_group"]) for row in inputs}:
         raise ValueError("Reference group mismatch")
     snapshot = {(r["complex_id"], r["area_group"]): r for r in inputs}
+    return month, expected, snapshot
+
+
+def live_reference():
+    from database import connect
+    from inference import forecast, load_model
+
+    with connect() as db:
+        rows = db.execute("""
+            SELECT m.*, a.representative_area
+            FROM model_inputs m JOIN area_groups a USING (complex_id, area_group)
+            WHERE month = (SELECT max(month) FROM model_inputs)
+        """).fetchall()
+    if not rows:
+        raise ValueError("No live model inputs")
+    model = load_model()
+    expected, inputs = {}, {}
+    for row in rows:
+        key = row["complex_id"], str(row["area_group"])
+        inputs[key] = row
+        expected[key] = {f["months"]: f["price_manwon"] for f in forecast(model, row)["forecasts"]}
+    return rows[0]["month"], expected, inputs
+
+
+def validate(base_url, live=False):
+    month, expected, snapshot = live_reference() if live else shipped_reference()
     for (complex_id, area_group), prices in expected.items():
         params = urlencode(dict(complex_id=complex_id, area_group=area_group, as_of=month))
         with urlopen(f"{base_url.rstrip('/')}/api/predict?{params}", timeout=20) as response:
@@ -57,4 +83,6 @@ def validate(base_url):
 if __name__ == "__main__":
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--base-url", default="http://127.0.0.1:8000")
-    validate(cli.parse_args().base_url)
+    cli.add_argument("--live", action="store_true", help="Compare against the current database inputs")
+    args = cli.parse_args()
+    validate(args.base_url, args.live)
