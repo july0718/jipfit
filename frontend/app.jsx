@@ -18,18 +18,66 @@ async function readApi(url, signal) {
   return response.json();
 }
 
+const seoulTime = value => new Date(value).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+
+function ComplexDetail({ id }) {
+  const [detail, setDetail] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    readApi("/api/complex?" + new URLSearchParams({ complex_id: id }), controller.signal)
+      .then(result => { if (!controller.signal.aborted) setDetail(result); })
+      .catch(err => { if (!controller.signal.aborted) setError(err.message); });
+    return () => controller.abort();
+  }, [id]);
+  if (error) return <p role="alert">단지 상세 조회 실패 · {error}</p>;
+  if (!detail) return <p>단지 상세 조회 중…</p>;
+  return <p>{detail.built}년 준공 · 거래 동기화 {detail.last_sync_at ? seoulTime(detail.last_sync_at) + " (한국시간)" : "기록 없음"}</p>;
+}
+
 function Results({ home, data }) {
   return <>
     <h2>{home.name} <small>{home.representative_area}㎡</small></h2>
     <p>{home.address}</p>
-    <div className="reference"><span>{data.as_of} 기준가</span><strong>{money(data.reference_price_manwon)}</strong></div>
+    <div className="reference"><span>입력 기준월 {data.as_of} · 기준가</span><strong>{money(data.reference_price_manwon)}</strong></div>
     <table><caption>기간별 예측</caption><thead><tr>
       <th>예측 기간</th><th>예측 매매가</th><th>기준가 대비</th>
     </tr></thead><tbody>{data.forecasts.map(f =>
       <tr key={f.months}><th scope="row">{f.months}개월 후</th><td>{money(f.price_manwon)}</td>
         <td className={f.return_percent >= 0 ? "positive" : "negative"}>{percent.format(f.return_percent)}%</td></tr>
     )}</tbody></table>
+    {data.calculated_at && <p>예측 계산 {seoulTime(data.calculated_at)} (한국시간)</p>}
   </>;
+}
+
+function TradeHistory({ complexId, areaGroup }) {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const [shown, setShown] = useState(20);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({ complex_id: complexId, area_group: areaGroup });
+    setError("");
+    readApi("/api/trades?" + params, controller.signal)
+      .then(result => { if (!controller.signal.aborted) setRows(result); })
+      .catch(err => { if (!controller.signal.aborted) setError(err.message); });
+    return () => controller.abort();
+  }, [complexId, areaGroup, attempt]);
+
+  return <section className="trade-history"><h2>실거래 이력</h2>
+    {error ? <p role="alert">{error} <button onClick={() => setAttempt(a => a + 1)}>다시 조회</button></p>
+      : rows === null ? <p>실거래 이력을 불러오는 중입니다.</p>
+      : rows.length === 0 ? <p>이 면적군에 등록된 실거래가 없습니다.</p>
+      : <><table><caption>최근 계약순 · 총 {rows.length.toLocaleString("ko-KR")}건</caption>
+          <thead><tr><th>계약일</th><th>전용면적 (㎡)</th><th>층</th><th>거래금액 (만 원)</th></tr></thead>
+          <tbody>{rows.slice(0, shown).map((row, index) =>
+            <tr key={index}><td>{row.contract_date}</td><td>{Number(row.area).toLocaleString("ko-KR", { maximumFractionDigits: 6 })}</td>
+              <td>{row.floor ?? "미상"}</td><td>{Number(row.price_manwon).toLocaleString("ko-KR")}</td></tr>
+          )}</tbody></table>
+          {shown < rows.length && <button onClick={() => setShown(n => n + 20)}>이전 거래 더 보기</button>}</>}
+  </section>;
 }
 
 function App() {
@@ -104,6 +152,7 @@ function App() {
               )}</div></>}
       </section>
       <section className="panel result" aria-label="예측 결과" aria-live="polite">
+        {selected && <ComplexDetail key={selected.complex_id} id={selected.complex_id}/>}
         {selected && <label>면적군
           <select value={home.area_group} onChange={e => select(selected.groups.find(g => g.area_group === Number(e.target.value)))}>
             {selected.groups.map(g => <option key={g.area_group} value={g.area_group}>
@@ -115,6 +164,8 @@ function App() {
           : error ? <><h2>예측 요청 실패</h2><p>{error}</p><button onClick={() => select(home)}>다시 예측</button></>
           : home ? <p>{home.name}의 예측값을 계산하고 있습니다.</p>
           : <><h2>예측 결과</h2><p>단지와 면적을 선택하면 기간별 예측 매매가가 표시됩니다.</p></>}
+        {home && <TradeHistory key={JSON.stringify([home.complex_id, home.area_group])}
+          complexId={home.complex_id} areaGroup={home.area_group}/>}
       </section>
     </div></main>
   </>;

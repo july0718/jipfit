@@ -44,3 +44,8 @@ thead th { color:#51645e; font-size:14px; }
 .account ul { padding-left:20px; }
 .account li { margin-top:6px; }
 .account-row + button { margin-top:12px; }
+
+.trade-history { margin-top:24px; }
+.trade-history caption { font-size:15px; margin-top:4px; }
+.trade-history td:first-child { text-align:left; }
+.trade-history button { margin-top:8px; }
