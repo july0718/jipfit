@@ -2,6 +2,12 @@ import React, { useRef, useState } from "react";
 import { loadMaps } from "./DistrictMap";
 import { exactAddressCandidates } from "./geocode-utils.cjs";
 
+// 추가 코드
+import allowedComplexIds from "./geocoding-allowlist.json";
+
+const allowedIds = new Set(allowedComplexIds);
+// 주소 검색 결과 후보 중에서 정확히 일치하는 주소만 반환
+
 const prefix = "jipfit-geocode-v1:";
 export function cachedPoint(address) {
   try {
@@ -28,7 +34,10 @@ export default function Coordinates({ complexes, district, onChange }) {
   const stop = useRef(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const scoped = complexes.filter(c => !district || c.address.split(" ")[1] === district);
+  const scoped = complexes.filter(c =>
+    allowedIds.has(c.complex_id) &&
+    (!district || c.address.split(" ")[1] === district)
+  );
   async function collect() {
     if (running.current) return;
     running.current = true;
@@ -40,10 +49,15 @@ export default function Coordinates({ complexes, district, onChange }) {
       if (!service?.geocode) throw new Error("네이버 지도 Geocoding을 사용할 수 없습니다.");
       const known = new Map(scoped.filter(c => c.latitude != null && c.longitude != null)
         .map(c => [c.address, { latitude: Number(c.latitude), longitude: Number(c.longitude) }]));
-      const addresses = new Set(scoped.filter(c => c.latitude == null || c.longitude == null).map(c => c.address));
+      const addresses = new Set(
+        scoped
+          .filter(c => c.latitude == null || c.longitude == null)
+          .map(c => c.address)
+          .slice(0, 20)
+      );
       for (const address of addresses) {
         if (stop.current) break;
-        const point = known.get(address) || cachedPoint(address) || await lookup(service, address);
+        const point = await lookup(service, address);
         if (point) {
           localStorage.setItem(prefix + address, JSON.stringify(point));
           found++;
@@ -57,7 +71,7 @@ export default function Coordinates({ complexes, district, onChange }) {
   }
   function download() {
     const coordinates = {};
-    for (const c of complexes) {
+    for (const c of scoped) {
       const point = cachedPoint(c.address);
       if (point) coordinates[c.complex_id] = { address: c.address, lat: point.latitude, lng: point.longitude };
     }
