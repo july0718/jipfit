@@ -10,10 +10,16 @@ def load_model():
     return artifact["model"]
 
 
+HORIZONS = (3, 6, 12)
+
+
+def predict_growth(model, rows):
+    features = pd.DataFrame(rows, columns=model.features, dtype=float)
+    return model.predict(features, months=HORIZONS)
+
+
 def forecast(model, row):
-    features = pd.DataFrame([{key: row[key] for key in model.features}], dtype=float)
-    horizons = (3, 6, 12)
-    growth = model.predict(features, months=horizons)[0]
+    growth = predict_growth(model, [row])[0]
     reference = math.exp(row["log_current"]) * float(row["representative_area"])
     return {
         "complex_id": row["complex_id"],
@@ -27,7 +33,7 @@ def forecast(model, row):
                 "price_manwon": reference * math.exp(rate),
                 "return_percent": 100 * math.expm1(rate),
             }
-            for months, rate in zip(horizons, growth, strict=True)
+            for months, rate in zip(HORIZONS, growth, strict=True)
         ],
     }
 

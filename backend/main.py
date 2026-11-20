@@ -9,7 +9,8 @@ from fastapi import FastAPI, HTTPException, Query
 from account_api import router
 from database import connect
 
-from inference import forecast, load_model
+from math import expm1
+from inference import HORIZONS, forecast, load_model, predict_growth
 
 
 @asynccontextmanager
@@ -34,9 +35,9 @@ async def validation_error(request, exc):
 
 
 @app.get("/api/complexes")
-def list_complexes():
+def list_complexes(include_sort: bool = False):
     with connect() as db:
-        return db.execute("""
+        rows = db.execute("""
             SELECT c.complex_id, c.name, c.address, c.latitude, c.longitude,
                    a.area_group, a.representative_area,
                    EXISTS (SELECT 1 FROM model_inputs m
@@ -45,6 +46,27 @@ def list_complexes():
             FROM complexes c JOIN area_groups a USING (complex_id)
             ORDER BY c.name, c.complex_id, a.area_group
         """).fetchall()
+        if not include_sort:
+            return rows
+        stats = {r["complex_id"]: r for r in db.execute("""
+            SELECT complex_id, count(*) AS trade_count, max(contract_date) AS last_trade
+            FROM trades WHERE NOT is_cancelled GROUP BY complex_id
+        """)}
+        inputs = db.execute("""
+            SELECT DISTINCT ON (complex_id) * FROM model_inputs
+            WHERE month = (SELECT max(month) FROM model_inputs)
+            ORDER BY complex_id, area_group
+        """).fetchall()
+    returns = {}
+    if inputs:
+        for row, rates in zip(inputs, predict_growth(app.state.model, inputs), strict=True):
+            returns[row["complex_id"]] = dict(zip(HORIZONS, (100 * expm1(r) for r in rates), strict=True))
+    for row in rows:
+        cid = row["complex_id"]
+        stat = stats.get(cid, {})
+        row.update(trade_count=stat.get("trade_count", 0), last_trade=stat.get("last_trade"),
+                   sort_returns=returns.get(cid, {}))
+    return rows
 
 
 @app.get("/api/complex")

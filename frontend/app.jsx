@@ -92,6 +92,8 @@ function App() {
   const pending = useRef(null);
 
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState("count");
+  const [horizon, setHorizon] = useState(3);
   const [onlyReady, setOnlyReady] = useState(false);
   const complexes = useMemo(() => {
     const index = new Map();
@@ -104,7 +106,18 @@ function App() {
   const visible = useMemo(() => complexes.filter(c =>
     (c.name + " " + c.address).includes(query.trim()) &&
     (!onlyReady || c.groups.some(g => g.predictable))
-  ), [complexes, query, onlyReady]);
+  ).sort((a, b) => {
+    if (sort === "recent") {
+      const order = (b.last_trade || "").localeCompare(a.last_trade || "");
+      if (order) return order;
+    }
+    if (sort === "return") {
+      const left = a.sort_returns?.[horizon] ?? -Infinity;
+      const right = b.sort_returns?.[horizon] ?? -Infinity;
+      if (left !== right) return right > left ? 1 : -1;
+    }
+    return b.trade_count - a.trade_count || a.complex_id.localeCompare(b.complex_id, "ko");
+  }), [complexes, query, onlyReady, sort, horizon]);
   const selected = complexes.find(c => c.complex_id === home?.complex_id);
   function selectComplex(c) {
     select(c.groups.find(g => g.predictable) || c.groups[0]);
@@ -113,7 +126,7 @@ function App() {
   useEffect(() => {
     const controller = new AbortController();
     setListError("");
-    readApi("/api/complexes", controller.signal).then(setHomes).catch(err => {
+    readApi("/api/complexes?include_sort=true", controller.signal).then(setHomes).catch(err => {
       if (!controller.signal.aborted) setListError(err.message);
     });
     return () => controller.abort();
@@ -148,9 +161,17 @@ function App() {
           : homes.length === 0 ? <p>등록된 단지가 없습니다.</p>
           : <><label>단지명 또는 주소<input type="search" value={query} onChange={e => setQuery(e.target.value)}/></label>
               <label><input type="checkbox" checked={onlyReady} onChange={e => setOnlyReady(e.target.checked)}/> 예측 가능한 단지만</label>
+              <label>목록 정렬<select value={sort} onChange={e => setSort(e.target.value)}>
+                <option value="count">거래건수순</option><option value="recent">최근 거래순</option>
+                <option value="return">선택 기간 예상 상승률순</option></select></label>
+              {sort === "return" && <label>전망 기간<select value={horizon} onChange={e => setHorizon(Number(e.target.value))}>
+                {[3, 6, 12].map(m => <option key={m} value={m}>{m}개월</option>)}</select></label>}
               <p>{visible.length}개 단지</p><div className="home-list">{visible.map(c =>
                 <button className="home" key={c.complex_id} aria-pressed={selected === c}
-                  onClick={() => selectComplex(c)}><b>{c.name}</b><span>{c.address}</span></button>
+                  onClick={() => selectComplex(c)}><b>{c.name}</b><span>{c.address}</span><span>{sort === "count" ? (c.trade_count ?? 0).toLocaleString("ko-KR") + "건"
+                    : sort === "recent" ? c.last_trade || "거래 없음"
+                    : c.sort_returns?.[horizon] == null ? "예측 없음"
+                    : c.groups.find(g => g.predictable)?.area_group + "㎡군 · " + percent.format(c.sort_returns[horizon]) + "%"}</span></button>
               )}</div></>}
       </section>
       <section className="panel result" aria-label="예측 결과" aria-live="polite">
