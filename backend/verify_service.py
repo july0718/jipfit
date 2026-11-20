@@ -3,6 +3,7 @@ import argparse
 import json
 from datetime import datetime
 from math import isclose
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -20,14 +21,32 @@ def verify(base):
         url = base.rstrip("/") + path
         if params:
             url += "?" + urlencode(params)
-        with urlopen(url, timeout=30) as response:
-            return response.read() if raw else json.load(response)
+        try:
+            with urlopen(url, timeout=30) as response:
+                return response.read() if raw else json.load(response)
+        except HTTPError as exc:
+            with exc:
+                headers = " ".join(f"{k}={exc.headers[k]}" for k in
+                                   ("Server", "Content-Type", "cf-mitigated", "cf-ray") if k in exc.headers)
+                raise ValueError(f"{path} HTTP {exc.code} {headers}") from None
+        except URLError as exc:
+            raise ValueError(f"{path} connection failed: {exc.reason}") from None
 
-    require(b'id="root"' in fetch("/", raw=True), "React page missing")
-    for asset in ("/app.js", "/config.js", "/style.css"):
-        content = fetch(asset, raw=True)
-        require(content.strip() and not content.lstrip().startswith(b"<"), f"Missing asset {asset}")
-    require(fetch("/api/account")["username"] is None, "Expected guest account")
+    failures = []
+    for path in ("/", "/app.js", "/config.js", "/style.css", "/api/account"):
+        try:
+            if path == "/api/account":
+                require(fetch(path)["username"] is None, "Expected guest account")
+            else:
+                content = fetch(path, raw=True)
+                if path == "/":
+                    require(b'id="root"' in content, "React page missing")
+                else:
+                    require(content.strip() and not content.lstrip().startswith(b"<"), "Missing asset")
+            print("PASS", path, flush=True)
+        except (ValueError, KeyError, OSError) as exc:
+            failures.append(path)
+            print("FAIL", path, exc, flush=True)
     homes = fetch("/api/complexes", {"include_sort": "true"})
     with connect() as db:
         total = db.execute("SELECT count(*) AS n FROM area_groups").fetchone()["n"]
@@ -66,8 +85,13 @@ def verify(base):
                 "Latest successful sync timestamp mismatch")
         print("PASS", total, "groups; latest successful refresh:", sync.isoformat())
 
+    require(not failures, "Failed routes: " + ", ".join(failures))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("base", nargs="?", default="https://jipfit-48v.pages.dev")
-    verify(parser.parse_args().base)
+    try:
+        verify(parser.parse_args().base)
+    except ValueError as exc:
+        parser.exit(1, f"FAIL {exc}\n")
