@@ -2,7 +2,7 @@ FROM node:22-alpine AS build
 WORKDIR /web
 COPY package.json ./
 RUN npm install --no-audit --no-fund
-COPY Coordinates.jsx geocode-utils.cjs app.jsx DistrictMap.jsx Account.jsx PriceCharts.jsx ./
+COPY Coordinates.jsx geocode-utils.cjs app.jsx DistrictMap.jsx Account.jsx PriceCharts.jsx map-unverified-complexes.json ./
 RUN npm run build
 
 FROM nginx:stable-alpine
