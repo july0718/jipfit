@@ -1,0 +1,86 @@
+[
+  {
+    "complex_id": "서울특별시 동작구 봉천동|1000|현대(관악)",
+    "query": "서울특별시 관악구 봉천동 1000",
+    "mode": "jibun",
+    "expectedArea": "서울특별시 관악구 봉천동",
+    "historical_site_only": false
+  },
+  {
+    "complex_id": "서울특별시 서대문구 길동|103-5|청원파크빌3",
+    "query": "서울특별시 강동구 길동 103-5",
+    "mode": "jibun",
+    "expectedArea": "서울특별시 강동구 길동",
+    "historical_site_only": false
+  },
+  {
+    "complex_id": "서울특별시 관악구 사당동|1152|관악푸르지오102동",
+    "query": "서울특별시 동작구 사당동 1152",
+    "mode": "jibun",
+    "expectedArea": "서울특별시 동작구 사당동",
+    "historical_site_only": false
+  },
+  {
+    "complex_id": "서울특별시 성동구 행당동|128|라체르보푸르지오써밋",
+    "query": "서울특별시 성동구 고산자로2길 71",
+    "mode": "road",
+    "expectedArea": "서울특별시 성동구 행당동",
+    "historical_site_only": false
+  },
+  {
+    "complex_id": "서울특별시 구로구 항동|가-238|하버라인4단지",
+    "query": "서울특별시 구로구 항동로 72",
+    "mode": "road",
+    "expectedArea": "서울특별시 구로구 항동",
+    "historical_site_only": false
+  },
+  {
+    "complex_id": "서울특별시 강동구 천호동|585|더샵강동센트럴시티",
+    "query": "서울특별시 강동구 진황도로 14",
+    "mode": "road",
+    "expectedArea": "서울특별시 강동구 천호동",
+    "historical_site_only": false
+  },
+  {
+    "complex_id": "서울특별시 강북구 도봉동|642|현대성우",
+    "query": "서울특별시 도봉구 도봉동 642",
+    "mode": "jibun",
+    "expectedArea": "서울특별시 도봉구 도봉동",
+    "historical_site_only": false
+  },
+  {
+    "complex_id": "서울특별시 서초구 잠원동|64-8|신반포5",
+    "query": "서울특별시 서초구 잠원로 117",
+    "mode": "road",
+    "expectedArea": "서울특별시 서초구 잠원동",
+    "historical_site_only": true
+  },
+  {
+    "complex_id": "서울특별시 동작구 봉천동|729-24|캐릭터그린빌",
+    "query": "서울특별시 관악구 봉천동 729-24",
+    "mode": "jibun",
+    "expectedArea": "서울특별시 관악구 봉천동",
+    "historical_site_only": false
+  },
+  {
+    "complex_id": "서울특별시 성동구 신당동|845|한진해모로",
+    "query": "서울특별시 중구 신당동 845",
+    "mode": "jibun",
+    "expectedArea": "서울특별시 중구 신당동",
+    "historical_site_only": false
+  },
+  {
+    "complex_id": "서울특별시 성북구 청량리동|949|샹그레빌아파트",
+    "query": "서울특별시 동대문구 청량리동 949",
+    "mode": "jibun",
+    "expectedArea": "서울특별시 동대문구 청량리동",
+    "historical_site_only": false
+  },
+  {
+    "complex_id": "서울특별시 강동구 고덕동|BL-3-1|고덕풍경채어바니티",
+    "query": "서울특별시 강동구 아리수로 375",
+    "mode": "road",
+    "expectedArea": "서울특별시 강동구 고덕동",
+    "historical_site_only": false
+  }
+]
