@@ -4,7 +4,7 @@ COPY package.json ./
 RUN npm install --no-audit --no-fund
 COPY facilities ./facilities
 COPY public/metadata ./public/metadata
-COPY build-facilities.mjs housingAnalysis.mjs Coordinates.jsx geocode-utils.cjs app.jsx staticData.js mapData.js DistrictMap.jsx Account.jsx PriceCharts.jsx map-unverified-complexes.json ./
+COPY build-facilities.mjs housingAnalysis.mjs Coordinates.jsx geocode-utils.cjs app.jsx staticData.js mapData.js DistrictMap.jsx Account.jsx PriceCharts.jsx forecastReference.mjs map-unverified-complexes.json ./
 RUN npm run build
 
 FROM nginx:stable-alpine
