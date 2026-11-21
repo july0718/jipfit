@@ -37,7 +37,7 @@ export function ForecastChart({ data }) {
   return <PriceChart title="예측 매매가" points={points} forecast/>;
 }
 
-export function TradeChart({ rows }) {
+export const TradeChart = React.memo(function TradeChart({ rows }) {
   const points = useMemo(() => {
     const buckets = new Map();
     for (const row of rows) {
@@ -55,4 +55,4 @@ export function TradeChart({ rows }) {
     });
   }, [rows]);
   return <PriceChart title="월별 실거래가 중앙값" points={points}/>;
-}
+});

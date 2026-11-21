@@ -46,7 +46,15 @@ def reconcile(db, month, complexes, wanted, district, *, history=False):
             raise ValueError(f"{district} {month}: existing trades differ from API; month rolled back")
         removed = [id_ for k, ids in existing.items() if not k[-1] for id_ in ids[wanted[k]:]]
         if removed:
-            cur.execute("DELETE FROM trades WHERE trade_id = ANY(%s)", (removed,))
+            # Preserve the prior reported row before replacing the active version.
+            cur.execute(f"""
+                WITH revised AS (
+                    DELETE FROM trades WHERE trade_id = ANY(%s)
+                    RETURNING trade_id,{FIELDS}
+                )
+                INSERT INTO trade_revisions(trade_id,{FIELDS})
+                SELECT trade_id,{FIELDS} FROM revised
+            """, (removed,))
         additions = wanted - counts
         cur.executemany(f"INSERT INTO trades({FIELDS}) VALUES (%s,%s,%s,%s,%s,%s,%s)", additions.elements())
         return sum(additions.values()), len(removed)
@@ -80,6 +88,8 @@ def refresh(district, temp):
         with db.transaction():
             db.execute((ROOT/"db/trade_status.sql").read_text(encoding="utf-8"))
             db.execute((ROOT/"db/regions.sql").read_text(encoding="utf-8"))
+            db.execute((ROOT/"db/trade_revisions.sql").read_text(encoding="utf-8"))
+            db.execute((ROOT/"db/metadata_refresh.sql").read_text(encoding="utf-8"))
         db.execute("SELECT pg_advisory_xact_lock(%s)", (1121505 if district == GWANGJIN else int(district),))
         db.execute("""CREATE TABLE IF NOT EXISTS refresh_runs (
             day date PRIMARY KEY, finished_at timestamptz NOT NULL, added integer NOT NULL,
@@ -111,6 +121,26 @@ def refresh(district, temp):
     print(f"{district} {today}: added={added} removed={removed} forecast_groups={n}", flush=True)
 
 
+def refresh_many(districts):
+    failed = []
+    with tempfile.TemporaryDirectory() as temp:
+        for district in districts:
+            try:
+                refresh(district, temp)
+            except Exception as exc:
+                failed.append(district)
+                print(f"{district} update failed ({type(exc).__name__}): check source availability and credentials.", flush=True)
+    return failed
+
+
+def seconds_until_refresh():
+    now = datetime.now(KST)
+    next_run = datetime.combine(now.date(), time(6), KST)
+    if now >= next_run:
+        next_run += timedelta(days=1)
+    return (next_run - now).total_seconds()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
@@ -118,14 +148,7 @@ def main():
     args = parser.parse_args()
     districts = [args.district] if args.district else list(DISTRICTS)
     while True:
-        failed = []
-        with tempfile.TemporaryDirectory() as temp:
-            for district in districts:
-                try:
-                    refresh(district, temp)
-                except Exception as exc:
-                    failed.append(district)
-                    print(f"{district} update failed ({type(exc).__name__}): check source availability and credentials.", flush=True)
+        failed = refresh_many(districts)
         if args.once:
             if failed:
                 raise SystemExit("Failed districts: " + ", ".join(failed))
@@ -133,9 +156,7 @@ def main():
         if failed:
             clock.sleep(3600)
         else:
-            now = datetime.now(KST)
-            tomorrow = datetime.combine(now.date()+timedelta(days=1), time(6), KST)
-            clock.sleep((tomorrow-now).total_seconds())
+            clock.sleep(seconds_until_refresh())
 
 
 if __name__ == "__main__":

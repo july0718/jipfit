@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { clusterMarkers } from "./mapData";
 import pendingCoordinateReviewIds from "./map-unverified-complexes.json";
 
 // Coordinates can be archived without marking a complex as currently existing.
@@ -10,7 +11,8 @@ const pricedGroup = complex => complex.groups?.find(group =>
   group.marker_price_manwon != null &&
   Number.isFinite(Number(group.marker_price_manwon)) &&
   Number(group.marker_price_manwon) > 0);
-const eligibleForMap = complex => !unverifiedIds.has(complex.complex_id) &&
+const eligibleForMap = complex => !["demolished", "unconfirmed"].includes(complex.existence_status) &&
+  (complex.existence_status === "active" || !unverifiedIds.has(complex.complex_id)) &&
   Number(complex.trade_count) > 0 && Boolean(pricedGroup(complex));
 
 let sdk;
@@ -59,7 +61,7 @@ function priceLabel(c) {
   const group = pricedGroup(c);
   const value = group.marker_price_manwon;
   const price = (Number(value) / 10000).toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "억";
-  return { price, detail: group.area_group + "㎡군 · " + (group.predictable ? "기준가격" : "최근 실거래"),
+  return { price, detail: group.area_group + "㎡군 · 최근 실거래",
     ready: group.predictable };
 }
 
@@ -79,7 +81,7 @@ function markerContent(c, selected) {
   return card.outerHTML;
 }
 
-export default function DistrictMap({ district, allComplexes, complexes, onSelect, selectedId }) {
+function DistrictMap({ district, allComplexes, complexes, onSelect, selectedId, onViewport }) {
   const center = React.useMemo(() => {
     const points = allComplexes.filter(c => eligibleForMap(c) && c.latitude != null && c.longitude != null && c.address.split(" ")[1] === district);
     if (!points.length) return [37.5665, 126.978];
@@ -92,8 +94,11 @@ export default function DistrictMap({ district, allComplexes, complexes, onSelec
   const [limit, setLimit] = useState(20);
   const container = useRef(null);
   const instance = useRef(null);
-  const selectRef = useRef(onSelect);
-  selectRef.current = onSelect;
+  const redraw = useRef(null);
+  const positioned = React.useMemo(() => complexes.filter(c =>
+    eligibleForMap(c) && c.latitude != null && c.longitude != null), [complexes]);
+  const props = useRef(null);
+  props.current = {positioned, selectedId, limit, onSelect, onViewport};
   const [maps, setMaps] = useState(null);
   const [failure, setFailure] = useState("");
   useEffect(() => {
@@ -109,48 +114,96 @@ export default function DistrictMap({ district, allComplexes, complexes, onSelec
   useEffect(() => {
     if (!maps) return;
     const map = new maps.Map(container.current, {
-      center: new maps.LatLng(lat, lng), zoom: district ? 13 : 11, zoomControl: true
+      center: new maps.LatLng(37.5665, 126.978), zoom: 13, zoomControl: true
     });
     instance.current = map;
-    return () => { instance.current = null; map.destroy?.(); };
-  }, [maps, district, lat, lng]);
-  useEffect(() => {
-    if (!instance.current) return;
-    const map = instance.current;
-    let markers = [];
-    function clear() {
-      markers.forEach(({ marker, listener }) => {
-        maps.Event.removeListener(listener);
-        marker.setMap(null);
-      });
-      markers = [];
+    const markers = new Map();
+    let frame = null;
+    function remove({marker, listener}) {
+      maps.Event.removeListener(listener);
+      marker.setMap(null);
     }
-    function redraw() {
+    function render() {
+      frame = null;
       const bounds = map.getBounds();
       if (!bounds) return;
-      clear();
-      const inside = complexes.filter(c => eligibleForMap(c) && c.latitude != null && c.longitude != null &&
-        bounds.hasLatLng(new maps.LatLng(c.latitude, c.longitude)));
-      markers = capped(inside, limit, selectedId).map(c => {
+      const {positioned, selectedId, limit, onViewport} = props.current;
+      const sw = bounds.getSW(), ne = bounds.getNE();
+      onViewport([sw.lat(), sw.lng(), ne.lat(), ne.lng()]);
+      const inside = positioned.filter(c => bounds.hasLatLng(new maps.LatLng(c.latitude, c.longitude)));
+      const pins = capped(clusterMarkers(inside, map.getZoom(), selectedId), limit, selectedId);
+      const shown = new Set(pins.map(pin => pin.complex_id));
+      for (const [id, entry] of markers) {
+        if (!shown.has(id)) {
+          remove(entry);
+          markers.delete(id);
+        }
+      }
+      for (const pin of pins) {
+        const id = pin.complex_id;
+        const selected = id === selectedId;
+        const label = pin.count ? String(pin.count) : markerContent(pin, selected);
+        const signature = JSON.stringify([pin.latitude, pin.longitude, label, selected]);
+        const existing = markers.get(id);
+        if (existing?.signature === signature) {
+          existing.pin = pin;
+          continue;
+        }
+        if (existing) remove(existing);
+        const position = new maps.LatLng(pin.latitude, pin.longitude);
         const marker = new maps.Marker({
-          map: instance.current, position: new maps.LatLng(c.latitude, c.longitude),
-          title: c.name, zIndex: selectedId === c.complex_id ? 100 : 1,
-          icon: { content: markerContent(c, selectedId === c.complex_id), anchor: new maps.Point(60, 58) }
+          map, position, title: pin.count ? pin.count + "개 단지 확대" : pin.name,
+          zIndex: selected ? 100 : 1,
+          icon: pin.count
+            ? {content: '<div class="cluster-pin">' + pin.count + '</div>', anchor: new maps.Point(20, 20)}
+            : {content: label, anchor: new maps.Point(60, 58)}
         });
-        const listener = maps.Event.addListener(marker, "click", () => selectRef.current(c));
-        return { marker, listener };
-      });
+        const entry = {marker, pin, signature};
+        entry.listener = maps.Event.addListener(marker, "click", () => {
+          if (entry.pin.count) {
+            map.setCenter(position);
+            map.setZoom(Math.min(15, map.getZoom() + 2));
+          } else props.current.onSelect(entry.pin);
+        });
+        markers.set(id, entry);
+      }
     }
-    const idle = maps.Event.addListener(map, "idle", redraw);
-    redraw();
-    return () => { maps.Event.removeListener(idle); clear(); };
-  }, [maps, complexes, selectedId, limit, district, lat, lng]);
+    function schedule() {
+      if (frame === null) frame = requestAnimationFrame(render);
+    }
+    redraw.current = schedule;
+    const idle = maps.Event.addListener(map, "idle", schedule);
+    schedule();
+    return () => {
+      redraw.current = null;
+      instance.current = null;
+      centered.current = null;
+      if (frame !== null) cancelAnimationFrame(frame);
+      maps.Event.removeListener(idle);
+      markers.forEach(remove);
+      map.destroy?.();
+    };
+  }, [maps]);
+  const centered = useRef(null);
   useEffect(() => {
-    const c = complexes.find(item => item.complex_id === selectedId);
-    if (instance.current && c && eligibleForMap(c) && c.latitude != null && c.longitude != null)
-      instance.current.panTo(new maps.LatLng(c.latitude, c.longitude));
-  }, [selectedId, maps, complexes]);
-  const positioned = complexes.filter(c => eligibleForMap(c) && c.latitude != null && c.longitude != null);
+    const map = instance.current;
+    if (!map || (district && !allComplexes.length) || centered.current === district) return;
+    centered.current = district;
+    map.setCenter(new maps.LatLng(lat, lng));
+    map.setZoom(district ? 13 : 11);
+  }, [maps, district, allComplexes.length, lat, lng]);
+  useEffect(() => { redraw.current?.(); }, [positioned, selectedId, limit]);
+  const selectedPoint = positioned.find(item => item.complex_id === selectedId);
+  const selectedLat = selectedPoint?.latitude;
+  const selectedLng = selectedPoint?.longitude;
+  useEffect(() => {
+    if (instance.current && selectedLat != null && selectedLng != null) {
+      instance.current.panTo(new maps.LatLng(selectedLat, selectedLng));
+    }
+  }, [selectedId, maps, selectedLat, selectedLng]);
+  useEffect(() => {
+    if (failure) onViewport([lat-height/2, lng-width/2, lat+height/2, lng+width/2]);
+  }, [failure, lat, lng, height, width, onViewport]);
   return <><label>현재 지도 범위의 마커<select value={limit} onChange={e => setLimit(Number(e.target.value))}>
     <option value={20}>20개</option><option value={100}>100개</option><option value={Infinity}>전체</option>
   </select></label><div className="map-box">
@@ -169,3 +222,5 @@ export default function DistrictMap({ district, allComplexes, complexes, onSelec
 }
 
 
+
+export default React.memo(DistrictMap);

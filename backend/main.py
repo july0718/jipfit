@@ -10,7 +10,7 @@ from account_api import router
 from database import connect
 from districts import DISTRICTS
 
-from math import exp, expm1
+from math import expm1
 from inference import HORIZONS, forecast, load_model, predict_growth
 
 
@@ -20,6 +20,7 @@ async def lifespan(app):
         db.execute("SELECT pg_advisory_xact_lock(1121506)")
         db.execute((Path(__file__).parent / "db/trade_status.sql").read_text(encoding="utf-8"))
         db.execute((Path(__file__).parent / "db/regions.sql").read_text(encoding="utf-8"))
+        db.execute((Path(__file__).parent / "db/metadata_refresh.sql").read_text(encoding="utf-8"))
         db.execute((Path(__file__).parent / "db/user_accounts.sql").read_text(encoding="utf-8"))
     app.state.model = load_model()
     yield
@@ -47,7 +48,7 @@ def health():
 def list_complexes(include_sort: bool = False):
     with connect() as db:
         rows = db.execute("""
-            SELECT c.complex_id, c.name, c.address, c.latitude, c.longitude,
+            SELECT c.complex_id, c.name, c.address, c.latitude, c.longitude, c.existence_status,
                    a.area_group, a.representative_area,
                    (m.complex_id IS NOT NULL) AS predictable
             FROM complexes c JOIN area_groups a USING (complex_id)
@@ -71,7 +72,6 @@ def list_complexes(include_sort: bool = False):
             JOIN district_input_months d ON d.district=split_part(m.complex_id,' ',2) AND m.month=d.month
             ORDER BY complex_id, area_group
         """).fetchall()
-    reference_units = {(r["complex_id"], r["area_group"]): exp(r["log_current"]) for r in inputs}
     returns = {}
     if inputs:
         for row, rates in zip(inputs, predict_growth(app.state.model, inputs), strict=True):
@@ -79,8 +79,7 @@ def list_complexes(include_sort: bool = False):
     for row in rows:
         cid = row["complex_id"]
         key = cid, row["area_group"]
-        row["marker_price_manwon"] = (reference_units[key] * float(row["representative_area"])
-                                      if key in reference_units else last_prices.get(key))
+        row["marker_price_manwon"] = last_prices.get(key)
         stat = stats.get(cid, {})
         row.update(trade_count=stat.get("trade_count", 0), last_trade=stat.get("last_trade"),
                    sort_returns=returns.get(cid, {}))
