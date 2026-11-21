@@ -38,6 +38,29 @@ async function readForecast(params, signal) {
 
 const seoulTime = value => new Date(value).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
 
+const schoolLevels = ["초등학교","중학교","고등학교"];
+const emptyFacilityFilters = {households:"",parking:"",station:"",school:"",level:"초등학교"};
+const schoolAt = (f, level) => f?.schools?.find(row => row[1] === level);
+const nearbyLabel = row => row ? row[0] + " · " + row[1] + " · " + row[2].toLocaleString("ko-KR") + " m" : "정보 없음";
+const facilityFields = [
+  ["총세대수", f => f?.households != null ? f.households.toLocaleString("ko-KR") + "세대" : "정보 없음"],
+  ["세대당 주차대수", f => f?.parking != null ? f.parking.toFixed(2) + "대/세대" : "정보 없음"],
+  ["가까운 지하철역", f => nearbyLabel(f?.station)],
+  ...schoolLevels.map(level => ["가까운 " + level, f => nearbyLabel(schoolAt(f,level))])
+];
+function matchesFacilities(f, filters) {
+  const min = (value, bound) => bound === "" || (value != null && value >= Number(bound));
+  const max = (value, bound) => bound === "" || (value != null && value <= Number(bound));
+  return min(f?.households,filters.households) && min(f?.parking,filters.parking) &&
+    max(f?.station?.[2],filters.station) && max(schoolAt(f,filters.level)?.[2],filters.school);
+}
+function FacilityPanel({ facilities }) {
+  return <section><h3>단지 규모와 주변 시설</h3><dl className="facility-details">
+    {facilityFields.map(([label,show])=><React.Fragment key={label}><dt>{label}</dt><dd>{show(facilities)}</dd></React.Fragment>)}
+  </dl><small>거리 기준은 수록된 시설까지의 직선거리입니다. 학교 배정은 별도 확인이 필요합니다.{" "}
+    <a href="/metadata/facility-sources.txt" target="_blank" rel="noreferrer">자료 기준 확인</a></small></section>;
+}
+
 function ComplexDetail({ id, built }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState("");
@@ -155,6 +178,7 @@ function Comparison({ items, months, setMonths, remove, close }) {
     ["전용면적군", d => d.item.area_group + "㎡군"],
     ["모델 대표면적", d => d.forecast ? d.forecast.representative_area + "㎡" : "—"],
     ["준공연도", d => (d.item.built === undefined ? d.detail.built : d.item.built) + "년"],
+    ...facilityFields.map(([label, show]) => [label, d => show(d.item.facilities)]),
     ["현재 기준가격", d => d.forecast ? money(d.forecast.reference_price_manwon) : "산정값 없음"],
     [months + "개월 후 예상가격", (_, f) => f ? money(f.price_manwon) : "예측 없음"],
     ["예상 가격상승률", (_, f) => f ? percent.format(f.return_percent) + "%" : "—"],
@@ -203,6 +227,7 @@ function App() {
   const pending = useRef(null);
 
   const [query, setQuery] = useState("");
+  const [facilityFilters,setFacilityFilters] = useState(emptyFacilityFilters);
   const [ranges, setRanges] = useState(EMPTY_RANGES);
   const [sort, setSort] = useState("count");
   const [horizon, setHorizon] = useState(3);
@@ -230,7 +255,7 @@ function App() {
   }, [homes, coordinateRevision]);
   const visible = useMemo(() => complexes.filter(c =>
     (!district || c.address.split(" ")[1] === district) &&
-    (c.name + " " + c.address).includes(query.trim())
+    (c.name + " " + c.address).includes(query.trim()) && matchesFacilities(c.facilities,facilityFilters)
   ).map(c => matchingComplex(c, ranges, onlyReady)).filter(Boolean).sort((a, b) => {
     if (sort === "recent") {
       const order = (b.last_trade || "").localeCompare(a.last_trade || "");
@@ -242,7 +267,7 @@ function App() {
       if (left !== right) return right > left ? 1 : -1;
     }
     return b.trade_count - a.trade_count || a.complex_id.localeCompare(b.complex_id, "ko");
-  }), [complexes, query, ranges, onlyReady, sort, horizon, district]);
+  }), [complexes, query, facilityFilters, ranges, onlyReady, sort, horizon, district]);
   const selected = complexes.find(c => c.complex_id === home?.complex_id);
   
 
@@ -326,7 +351,12 @@ function App() {
                       value={ranges[key + suffix]} onChange={e => { setRanges({...ranges, [key + suffix]: e.target.value}); setListPage(0); }}/>)}
                     {ranges[key+"Min"] && ranges[key+"Max"] && Number(ranges[key+"Min"]) > Number(ranges[key+"Max"]) &&
                       <small>최솟값이 최댓값보다 큽니다.</small>}</div>)}
-                <button onClick={() => { setRanges(EMPTY_RANGES); setListPage(0); }}>범위 초기화</button>
+                {[["households","최소 세대수 (세대)"],["parking","최소 세대당 주차대수 (대)"],["station","역까지 최대 직선거리 (m)"],["school","학교까지 최대 직선거리 (m)"]].map(([key,label]) =>
+                  <label key={key}>{label}<input type="number" min="0" step={key==="parking" ? "0.01" : "1"} placeholder="제한 없음"
+                    value={facilityFilters[key]} onChange={e=>{setFacilityFilters({...facilityFilters,[key]:e.target.value});setListPage(0);}}/></label>)}
+                <label>학교 거리 기준<select value={facilityFilters.level} onChange={e=>{setFacilityFilters({...facilityFilters,level:e.target.value});setListPage(0);}}>
+                  {schoolLevels.map(level=><option key={level}>{level}</option>)}</select></label>
+                <button onClick={() => { setFacilityFilters(emptyFacilityFilters); setRanges(EMPTY_RANGES); setListPage(0); }}>범위 초기화</button>
               </fieldset><label>목록 정렬<select value={sort} onChange={e => { setSort(e.target.value); setListPage(0); }}>
                 <option value="count">거래건수순</option><option value="recent">최근 거래순</option>
                 <option value="return">선택 기간 예상 상승률순</option></select></label>
@@ -352,6 +382,7 @@ function App() {
       </section>
       <section className="panel result" aria-label="예측 결과" aria-live="polite">
         {selected && <ComplexDetail key={selected.complex_id} id={selected.complex_id} built={selected.built}/>}
+        {selected && <FacilityPanel facilities={selected.facilities}/>}
         {selected && <label>면적군
           <select value={home.area_group} onChange={e => select(selected.groups.find(g => g.area_group === Number(e.target.value)))}>
             {selected.groups.map(g => <option key={g.area_group} value={g.area_group}>

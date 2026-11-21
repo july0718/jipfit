@@ -194,6 +194,19 @@ function DistrictMap({ district, allComplexes, complexes, onSelect, selectedId, 
   }, [maps, district, allComplexes.length, lat, lng]);
   useEffect(() => { redraw.current?.(); }, [positioned, selectedId, limit]);
   const selectedPoint = positioned.find(item => item.complex_id === selectedId);
+  const [showNearby,setShowNearby] = useState(false);
+  const facilities = selectedPoint?.facilities;
+  useEffect(() => {
+    if (!maps || !instance.current || !showNearby || !facilities) return;
+    const places = [facilities.station,...(facilities.schools || [])].filter(Boolean);
+    const markers = places.map(([name,kind,,lat,lon]) => {
+      const label = document.createElement("span");
+      label.className = "facility-marker";
+      label.textContent = name + " · " + kind;
+      return new maps.Marker({map:instance.current,position:new maps.LatLng(lat,lon),title:name,icon:{content:label.outerHTML}});
+    });
+    return () => markers.forEach(marker => marker.setMap(null));
+  },[maps,showNearby,facilities]);
   const selectedLat = selectedPoint?.latitude;
   const selectedLng = selectedPoint?.longitude;
   useEffect(() => {
@@ -206,7 +219,7 @@ function DistrictMap({ district, allComplexes, complexes, onSelect, selectedId, 
   }, [failure, lat, lng, height, width, onViewport]);
   return <><label>현재 지도 범위의 마커<select value={limit} onChange={e => setLimit(Number(e.target.value))}>
     <option value={20}>20개</option><option value={100}>100개</option><option value={Infinity}>전체</option>
-  </select></label><div className="map-box">
+  </select></label>{maps && facilities && <label><input type="checkbox" checked={showNearby} onChange={e=>setShowNearby(e.target.checked)}/> 선택 단지 주변 역·학교 표시</label>}<div className="map-box">
     <div ref={container} className="district-map" aria-label="단지 지도"/>
     {failure ? <div className="coordinate-map" aria-label="단지 좌표 지도">
       <p>단지 위치도 · {failure}</p>
