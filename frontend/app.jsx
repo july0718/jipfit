@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { ForecastChart, TradeChart } from "./PriceCharts";
+import { ForecastChart, TradeChart, ComparisonChart } from "./PriceCharts";
 import { districtOf, readDistricts, readHomes, readTrades } from "./staticData";
 import { districtNames } from "./mapData";
 import Account from "./Account";
 import DistrictMap from "./DistrictMap";
 import Coordinates, { cachedPoint } from "./Coordinates";
 
+const MAX_COMPARED = 4;
 const money = value => Math.round(value).toLocaleString("ko-KR") + "만 원";
 const percent = new Intl.NumberFormat("ko-KR", {
   signDisplay: "exceptZero", minimumFractionDigits: 2, maximumFractionDigits: 2
@@ -73,6 +74,13 @@ function TradeHistory({ complexId, areaGroup }) {
   const [attempt, setAttempt] = useState(0);
   const [page, setPage] = useState(0);
   const pageSize = 20;
+  const [years, setYears] = useState(0);
+  const visibleRows = useMemo(() => {
+    if (!years || !rows) return rows;
+    const today = new Date();
+    const cutoff = new Date(Date.UTC(today.getUTCFullYear() - years, today.getUTCMonth(), today.getUTCDate()));
+    return rows.filter(row => row.contract_date >= cutoff.toISOString().slice(0, 10));
+  }, [rows, years]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -87,16 +95,18 @@ function TradeHistory({ complexId, areaGroup }) {
     {error ? <p role="alert">{error} <button onClick={() => setAttempt(a => a + 1)}>다시 조회</button></p>
       : rows === null ? <p>실거래 이력을 불러오는 중입니다.</p>
       : rows.length === 0 ? <p>이 면적군에 등록된 실거래가 없습니다.</p>
-      : <><TradeChart rows={rows}/><table><caption>최근 계약순 · 총 {rows.length.toLocaleString("ko-KR")}건</caption>
+      : <><label>거래 조회 기간<select value={years} onChange={e => { setYears(Number(e.target.value)); setPage(0); }}>
+            {[1, 3, 5, 0].map(n => <option key={n} value={n}>{n ? "최근 " + n + "년" : "전체 기간"}</option>)}
+          </select></label><TradeChart rows={visibleRows}/><table><caption>최근 계약순 · 총 {visibleRows.length.toLocaleString("ko-KR")}건</caption>
           <thead><tr><th>계약일</th><th>전용면적 (㎡)</th><th>층</th><th>거래금액 (만 원)</th></tr></thead>
-          <tbody>{rows.slice(page * pageSize, (page + 1) * pageSize).map((row, index) =>
+          <tbody>{visibleRows.slice(page * pageSize, (page + 1) * pageSize).map((row, index) =>
             <tr key={index}><td>{row.contract_date}{row.is_cancelled && <strong> · 계약 해제</strong>}</td><td>{Number(row.area).toLocaleString("ko-KR", { maximumFractionDigits: 6 })}</td>
               <td>{row.floor ?? "미상"}</td><td>{Number(row.price_manwon).toLocaleString("ko-KR")}</td></tr>
           )}</tbody></table>
-          {rows.length > pageSize && <div>
+          {visibleRows.length > pageSize && <div>
             <button disabled={page === 0} onClick={() => setPage(n => n - 1)}>앞 페이지</button>
-            {" "}{page + 1} / {Math.ceil(rows.length / pageSize)}{" "}
-            <button disabled={(page + 1) * pageSize >= rows.length} onClick={() => setPage(n => n + 1)}>이전 거래</button>
+            {" "}{page + 1} / {Math.ceil(visibleRows.length / pageSize)}{" "}
+            <button disabled={(page + 1) * pageSize >= visibleRows.length} onClick={() => setPage(n => n + 1)}>이전 거래</button>
           </div>}</>}
   </section>;
 }
@@ -112,7 +122,7 @@ function useComparedHome(item) {
     Promise.all([readTrades(item.complex_id, item.area_group, controller.signal), read("/api/complex"), readForecast(params, controller.signal)])
       .then(([rows, detail, forecast]) => {
         const trades = rows.filter(r => !r.is_cancelled);
-        if (!controller.signal.aborted) setResult({ item, attempt, detail, forecast, count: trades.length, latest: trades[0] });
+        if (!controller.signal.aborted) setResult({ item, attempt, detail, forecast, trades, count: trades.length, latest: trades[0] });
       }).catch(err => {
         if (!controller.signal.aborted) setResult({ item, attempt, error: err.message });
       });
@@ -124,7 +134,8 @@ function useComparedHome(item) {
 
 function Comparison({ items, months, setMonths, remove, close }) {
   const dialog = useRef(null);
-  const columns = [useComparedHome(items[0]), useComparedHome(items[1])];
+  const columns = [useComparedHome(items[0]), useComparedHome(items[1]),
+    useComparedHome(items[2]), useComparedHome(items[3])].filter(column => column.item);
   useEffect(() => { dialog.current.showModal(); }, []);
   const fields = [
     ["예측 기준월", d => d.forecast ? d.forecast.as_of + (d.forecast.pilot ? " · 시범" : "") : "—"],
@@ -145,10 +156,11 @@ function Comparison({ items, months, setMonths, remove, close }) {
         {[3,6,12].map(m => <option key={m} value={m}>{m}개월</option>)}</select></label>
       <div className="compare-scroll"><table><thead><tr><th>비교 항목</th>{columns.map(({item,data,retry}, i) =>
         <th key={i}>{item ? <>{item.name}<small>{item.address}</small><button onClick={() => remove(item)}>비교에서 빼기</button>
-          {data?.error && <small role="alert">{data.error} <button onClick={retry}>다시 조회</button></small>}</> : "두 번째 후보"}</th>
+          {data?.error && <small role="alert">{data.error} <button onClick={retry}>다시 조회</button></small>}</> : ""}</th>
       )}</tr></thead><tbody>{fields.map(([label, value]) => <tr key={label}><th scope="row">{label}</th>
         {columns.map(({item,data}, i) => <td key={i}>{!item || data?.error ? "—" : !data ? "조회 중…" :
           value(data, data.forecast?.forecasts.find(f => f.months === months))}</td>)}</tr>)}</tbody></table></div>
+      <ComparisonChart columns={columns}/>
       <small>예상 차익은 기준가격 대비 변화이며 거래 비용은 포함하지 않습니다.</small></>}
   </dialog>;
 }
@@ -171,8 +183,8 @@ function App() {
   function toggleCompared() {
     if (saved?.area_group === home.area_group) return removeCompared(home);
     if (saved) setCompared(previous => previous.map(c => c.complex_id === home.complex_id ? home : c));
-    else if (compared.length < 2) setCompared(previous => [...previous, home]);
-    else { setNotice("최대 두 단지를 비교합니다. 비교 창에서 한 단지를 빼 주세요."); return; }
+    else if (compared.length < MAX_COMPARED) setCompared(previous => [...previous, home]);
+    else { setNotice("최대 네 단지를 비교합니다. 비교 창에서 한 단지를 빼 주세요."); return; }
     setNotice(home.name + " " + home.area_group + "㎡군을 비교에 담았습니다.");
   }
   const pending = useRef(null);
@@ -279,7 +291,7 @@ function App() {
   const page = Math.min(listPage, pageCount - 1);
 
   return <>
-    <header><div className="brand">집핏</div><span>서울 아파트</span><button className="open-compare" onClick={() => setCompareOpen(true)}>단지 비교 ({compared.length}/2)</button></header>
+    <header><div className="brand">집핏</div><span>서울 아파트</span><button className="open-compare" onClick={() => setCompareOpen(true)}>단지 비교 ({compared.length}/{MAX_COMPARED})</button></header>
     {compareOpen && <Comparison items={compared} months={horizon} setMonths={setHorizon} remove={removeCompared} close={() => setCompareOpen(false)}/>}
     <main><h1>아파트 매매가 예측</h1><Account home={home} homes={homes} resolveHome={resolveHome} onSelect={selectSaved} compared={compared} horizon={horizon}
       onOpenComparison={openSavedComparison}/><label>지역<select value={district} onChange={e => { setDistrict(e.target.value); setViewport(null); setAll(false); pending.current?.abort(); setHome(null); setData(null); setError(""); }}>

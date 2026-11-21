@@ -37,22 +37,61 @@ export function ForecastChart({ data }) {
   return <PriceChart title="예측 매매가" points={points} forecast/>;
 }
 
+function monthlyPrices(rows) {
+  const buckets = new Map();
+  for (const row of rows) {
+    if (row.is_cancelled) continue;
+    const month = row.contract_date.slice(0, 7);
+    if (!buckets.has(month)) buckets.set(month, []);
+    buckets.get(month).push(Number(row.price_manwon));
+  }
+  return Array.from(buckets.keys()).sort().map(label => {
+    const values = buckets.get(label).sort((a,b) => a-b);
+    const middle = Math.floor(values.length / 2);
+    const price = values.length % 2 ? values[middle] : (values[middle-1] + values[middle]) / 2;
+    const [year, month] = label.split("-").map(Number);
+    return {time: year * 12 + month, price, label};
+  });
+}
+
 export const TradeChart = React.memo(function TradeChart({ rows }) {
-  const points = useMemo(() => {
-    const buckets = new Map();
-    for (const row of rows) {
-      if (row.is_cancelled) continue;
-      const month = row.contract_date.slice(0, 7);
-      if (!buckets.has(month)) buckets.set(month, []);
-      buckets.get(month).push(Number(row.price_manwon));
-    }
-    return Array.from(buckets.keys()).sort().map(label => {
-      const values = buckets.get(label).sort((a,b) => a-b);
-      const middle = Math.floor(values.length / 2);
-      const price = values.length % 2 ? values[middle] : (values[middle-1] + values[middle]) / 2;
-      const [year, month] = label.split("-").map(Number);
-      return {time: year * 12 + month, price, label};
-    });
-  }, [rows]);
+  const points = useMemo(() => monthlyPrices(rows), [rows]);
   return <PriceChart title="월별 실거래가 중앙값" points={points}/>;
 });
+
+const colors = ["#087e74", "#994b19", "#5952a4", "#9c3457"];
+
+function comparedSeries(column) {
+  return {
+    label: column.item.name + " " + column.item.area_group + "㎡군",
+    points: monthlyPrices(column.data?.trades || [])
+  };
+}
+
+export function ComparisonChart({ columns }) {
+  const series = columns.map(comparedSeries);
+  const points = series.flatMap(s => s.points);
+  if (!points.length) return null;
+  const times = points.map(p => p.time);
+  const prices = points.map(p => p.price / 10000);
+  const first = Math.min(...times), last = Math.max(...times);
+  const min = Math.min(...prices), max = Math.max(...prices);
+  const margin = Math.max((max - min) * 0.08, 0.02);
+  const low = Math.max(0, min - margin), high = max + margin;
+  const x = t => first === last ? 300 : 60 + (t - first) * 480 / (last - first);
+  const y = v => 150 - (v - low) * 132 / (high - low);
+  const monthLabel = t => Math.floor((t - 1) / 12) + "-" + String((t - 1) % 12 + 1).padStart(2, "0");
+  return <figure className="price-chart"><figcaption>단지별 월간 실거래가 중앙값 (억 원)</figcaption>
+    <svg viewBox="0 0 594 180" role="img" aria-label="같은 기간과 가격축으로 비교한 월별 실거래가">
+      {[low, (low + high) / 2, high].map(v => <g key={v}><line x1="60" x2="540" y1={y(v)} y2={y(v)} stroke="#d5dfdd"/>
+        <text x="53" y={y(v)+4} textAnchor="end">{v.toFixed(2)}</text></g>)}
+      {Array.from(new Set([first, last])).map(t => <text key={t} x={x(t)} y="173" textAnchor="middle">{monthLabel(t)}</text>)}
+      {series.map(({label, points}, i) => <g key={label + i} fill={colors[i]}>{points.map((p, j) => <g key={p.time}>
+        {j > 0 && p.time - points[j-1].time <= 3 && <line x1={x(points[j-1].time)} y1={y(points[j-1].price / 10000)}
+          x2={x(p.time)} y2={y(p.price / 10000)} stroke={colors[i]}/>}
+        <circle cx={x(p.time)} cy={y(p.price / 10000)} r="3"><title>{label} · {p.label} · {p.price.toLocaleString("ko-KR")}만 원</title></circle>
+      </g>)}</g>)}
+    </svg><ul className="comparison-legend">{series.map(({label, points}, i) => <li key={i}>
+      <span style={{background: colors[i]}}/>{label}{!points.length && (columns[i].data ? " · 자료 없음" : " · 조회 중")}
+    </li>)}</ul></figure>;
+}
