@@ -46,6 +46,21 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+  snapshot:
+    profiles: ["snapshots"]
+    build: ./backend
+    command: ["python", "export_public_json.py", "--out", "/export"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: jipfit
+      PGUSER: jipfit
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./frontend/public/data:/export
   updater:
     profiles: ["updates"]
     build: ./backend
