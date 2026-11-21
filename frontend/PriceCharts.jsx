@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { referenceBandPoints } from "./forecastReference.mjs";
+import { readStaticReference, referenceBandPoints } from "./forecastReference.mjs";
 
 function PriceChart({ title, points, forecast = false, rate = false, band = [] }) {
   if (!points.length) return <p>{title}에 표시할 유효 거래가 없습니다.</p>;
@@ -45,17 +45,27 @@ function PriceChart({ title, points, forecast = false, rate = false, band = [] }
 
 export function ForecastChart({ data }) {
   const [showReference, setShowReference] = React.useState(false);
+  const [staticReference, setStaticReference] = React.useState(null);
+  React.useEffect(() => {
+    if (data?.historical_reference) return;
+    let active = true;
+    readStaticReference().then(reference => { if (active) setStaticReference(reference); });
+    return () => { active = false; };
+  }, [data?.historical_reference]);
   const points = [{time: 0, price: Number(data.reference_price_manwon), label: "기준가"},
     ...data.forecasts.map(f => ({time: f.months, price: Number(f.price_manwon), label: f.months + "개월"}))];
-  const reference = referenceBandPoints(data);
+  const reference = referenceBandPoints({
+    ...data, historical_reference: data.historical_reference || staticReference
+  });
   const available = reference.length === data.forecasts.length;
   return <section className="forecast-reference">
     <PriceChart title="예측 매매가" points={points} forecast
       band={showReference && available ? reference : []}/>
+    <label><input type="checkbox" checked={showReference && available}
+      disabled={!available}
+      onChange={e => setShowReference(e.target.checked)}/>
+      광진구 과거 검증 오차 참고범위 표시</label>
     {available ? <>
-      <label><input type="checkbox" checked={showReference}
-        onChange={e => setShowReference(e.target.checked)}/>
-        광진구 과거 검증 오차 참고범위 표시</label>
       {showReference && <table>
         <caption>광진구 과거 모델 오차 분포 · 실제 상승률 − 예측 상승률 · 단위 %p</caption>
         <thead><tr><th>기간</th><th>표본</th><th>10백분위</th><th>90백분위</th></tr></thead>
@@ -66,8 +76,8 @@ export function ForecastChart({ data }) {
       </table>}
       <p role="note">참고용: 음영은 광진구 과거 모델 평가의 오차 분포를 현재 예측에 단순 적용한 값입니다.
         현재 서울 통합 HGB 모델의 검증된 신뢰구간이나 개별 단지 미래 가격의 확률 범위가 아닙니다.</p>
-    </> : <p role="note">현재 모델과 동일한 조건에서 검증한 예측 오차 범위는 아직 제공되지 않습니다.
-      예측선은 단일 추정값입니다.</p>}
+    </> : <p role="status">과거 검증 오차 참고자료를 아직 불러오지 못했습니다.
+      정적 자료 배포 또는 네트워크 연결을 확인해 주세요. 예측 가격선은 정상 표시됩니다.</p>}
   </section>;
 }
 

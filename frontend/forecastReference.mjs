@@ -1,5 +1,21 @@
 // A descriptive, opt-in chart overlay from the historical Gwangjin audit.
 // It is NOT a calibrated interval for the live Seoul-wide model.
+let staticReferencePromise;
+
+export function readStaticReference() {
+  if (!staticReferencePromise) {
+    staticReferencePromise = fetch("/metadata/forecast-reference.json", {cache: "no-store"})
+      .then(response => {
+        if (!response.ok) throw new Error("Static historical reference unavailable");
+        return response.json();
+      })
+      .then(document => document?.kind === "gwangjin_historical_model" &&
+        document.calibrated_for_current_model === false ? document : null)
+      .catch(() => null);
+  }
+  return staticReferencePromise;
+}
+
 export function referenceBandPoints(data) {
   const ref = data?.historical_reference;
   const baseline = Number(data?.reference_price_manwon);

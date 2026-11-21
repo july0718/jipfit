@@ -8,7 +8,10 @@ on:
       - "backend/reference_band.py"
       - "backend/test_reference_band.py"
       - "backend/Dockerfile"
+      - "tools/export_historical_reference.py"
+      - "tools/test_export_historical_reference.py"
       - ".github/workflows/feature19-checks.yml"
+      - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -42,3 +45,9 @@ jobs:
       - name: Historical quantile tests
         working-directory: backend
         run: python -m unittest test_reference_band -v
+      - name: Static JSON exporter tests
+        run: python -m unittest discover -s tools -p 'test_export_historical_reference.py' -v
+      - name: Verify production audit static export
+        run: |
+          python tools/export_historical_reference.py /tmp/forecast-reference.json
+          python -c "import json; p=json.load(open('/tmp/forecast-reference.json')); assert [x['sample_count'] for x in p['horizons']] == [1510,1143,535]; assert p['calibrated_for_current_model'] is False"
