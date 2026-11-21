@@ -3,7 +3,7 @@ import unittest
 
 import pandas as pd
 
-from reference_band import summarize_reference
+from reference_band import historical_reference, summarize_reference
 
 
 class ReferenceBandTest(unittest.TestCase):
@@ -23,6 +23,15 @@ class ReferenceBandTest(unittest.TestCase):
             self.assertEqual(row["sample_count"], 100)
             self.assertAlmostEqual(row["p10_pp"], -40.1, places=8)
             self.assertAlmostEqual(row["p90_pp"], 39.1, places=8)
+
+    def test_bundled_audit_is_readable_and_has_reported_sample_counts(self):
+        historical_reference.cache_clear()
+        result = historical_reference()
+        self.assertIsNotNone(result, "The shipped audit.csv.gz must be readable")
+        self.assertEqual([row["months"] for row in result["horizons"]], [3, 6, 12])
+        self.assertEqual([row["sample_count"] for row in result["horizons"]], [1510, 1143, 535])
+        for row in result["horizons"]:
+            self.assertLessEqual(row["p10_pp"], row["p90_pp"])
 
     def test_missing_horizon_must_not_create_fabricated_bounds(self):
         rows = pd.DataFrame({
