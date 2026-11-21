@@ -49,7 +49,7 @@ services:
   snapshot:
     profiles: ["snapshots"]
     build: ./backend
-    command: ["sh", "-c", "python export_public_json.py --out /export && python check_public_json.py --root /export"]
+    command: ["python", "export_public_json.py", "--out", "/export"]
     depends_on:
       db:
         condition: service_healthy

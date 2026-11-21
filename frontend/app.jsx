@@ -16,9 +16,20 @@ async function readApi(url, signal) {
   const response = await fetch(url, { signal, cache: "no-store" });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(typeof error.detail === "string" ? error.detail : "서버에 연결할 수 없습니다.");
+    const failure = new Error(typeof error.detail === "string" ? error.detail : "서버에 연결할 수 없습니다.");
+    failure.status = response.status;
+    throw failure;
   }
   return response.json();
+}
+
+async function readForecast(params, signal) {
+  try {
+    return await readApi("/api/predict?" + params, signal);
+  } catch (error) {
+    if (error.status === 404 && error.message === "선택한 단지와 면적군의 모델 입력이 없습니다.") return null;
+    throw error;
+  }
 }
 
 const seoulTime = value => new Date(value).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
@@ -63,7 +74,6 @@ function TradeHistory({ complexId, areaGroup }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    const params = new URLSearchParams({ complex_id: complexId, area_group: areaGroup });
     setError("");
     readTrades(complexId, areaGroup, controller.signal)
       .then(result => { if (!controller.signal.aborted) setRows(result); })
@@ -93,7 +103,7 @@ function useComparedHome(item) {
     const controller = new AbortController();
     const params = new URLSearchParams({ complex_id: item.complex_id, area_group: item.area_group });
     const read = path => readApi(path + "?" + params, controller.signal);
-    Promise.all([readTrades(item.complex_id, item.area_group, controller.signal), read("/api/complex"), item.predictable ? read("/api/predict") : null])
+    Promise.all([readTrades(item.complex_id, item.area_group, controller.signal), read("/api/complex"), readForecast(params, controller.signal)])
       .then(([rows, detail, forecast]) => {
         const trades = rows.filter(r => !r.is_cancelled);
         if (!controller.signal.aborted) setResult({ item, attempt, detail, forecast, count: trades.length, latest: trades[0] });
@@ -199,7 +209,9 @@ function App() {
   useEffect(() => {
     const controller = new AbortController();
     setListError("");
-    readHomes(controller.signal).then(setHomes).catch(err => {
+    readHomes(controller.signal).then(rows => {
+      if (!controller.signal.aborted) setHomes(rows);
+    }).catch(err => {
       if (!controller.signal.aborted) setListError(err.message);
     });
     return () => controller.abort();
@@ -211,12 +223,11 @@ function App() {
     const controller = new AbortController();
     pending.current = controller;
     setHome(item);
-    setData(null);
+    setData(undefined);
     setError("");
-    if (!item.predictable) return;
     const params = new URLSearchParams({ complex_id: item.complex_id, area_group: item.area_group });
     try {
-      const result = await readApi("/api/predict?" + params, controller.signal);
+      const result = await readForecast(params, controller.signal);
       if (!controller.signal.aborted) setData(result);
     } catch (err) {
       if (!controller.signal.aborted) setError(err.message);
@@ -263,7 +274,7 @@ function App() {
         {home && <button onClick={toggleCompared}>{!saved ? "이 면적군으로 비교에 담기" :
           saved.area_group === home.area_group ? "비교에서 이 단지 빼기" : "비교 면적군을 현재 선택으로 변경"}</button>}
         {notice && <p role="status">{notice}</p>}
-        {home && !home.predictable ? <><h2>{home.name}</h2><p>이 면적군에는 예측에 필요한 월별 입력이 없습니다.</p></>
+        {home && data === null ? <><h2>{home.name}</h2><p>이 면적군에는 예측에 필요한 월별 입력이 없습니다.</p></>
           : data ? <Results home={home} data={data}/>
           : error ? <><h2>예측 요청 실패</h2><p>{error}</p><button onClick={() => select(home)}>다시 예측</button></>
           : home ? <p>{home.name}의 예측값을 계산하고 있습니다.</p>

@@ -8,7 +8,13 @@ const methods = {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
+    if (!url.pathname.startsWith("/api/")) {
+      const asset = await env.ASSETS.fetch(request);
+      if (url.pathname.startsWith("/data/") && asset.headers.get("Content-Type")?.includes("text/html")) {
+        return new Response(null, {status: 404, headers: {"Cache-Control": "no-store"}});
+      }
+      return asset;
+    }
     const error = (detail, status) => Response.json({detail}, {status, headers: {"Cache-Control": "no-store"}});
     if (!methods[url.pathname]) return error("지원하지 않는 요청입니다.", 404);
     if (request.method !== methods[url.pathname]) return error("지원하지 않는 메서드입니다.", 405);

@@ -7,15 +7,17 @@ The manifest is published last. No trade rows are modified or deleted.
 import argparse
 from collections import defaultdict
 from datetime import datetime, timezone
-from hashlib import sha256
 from math import exp, expm1, isfinite
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 import psycopg
 from psycopg.rows import dict_row
 from fastapi.encoders import jsonable_encoder
 
+from check_public_json import check, trade_filename
 from districts import DISTRICTS
 from inference import HORIZONS, load_model, predict_growth
 
@@ -24,10 +26,6 @@ def write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(jsonable_encoder(payload), ensure_ascii=False,
                                separators=(",", ":"), allow_nan=False), encoding="utf-8")
-
-
-def trade_filename(complex_id):
-    return sha256(complex_id.encode("utf-8")).hexdigest() + ".json"
 
 
 def load_home_rows(db):
@@ -92,27 +90,36 @@ def load_home_rows(db):
     return homes
 
 
-def export(out):
+def build_release(staging):
     generated = datetime.now(timezone.utc)
     release = "releases/" + generated.strftime("%Y%m%dT%H%M%S%fZ")
-    target = out / release
+    target = staging / release
     target.mkdir(parents=True, exist_ok=False)
     districts = [{"code": code, "name": name} for code, name in DISTRICTS.items()]
-    totals = {"area_groups": 0, "complexes": 0, "transactions": 0}
+    totals = {"area_groups": 0, "complexes": 0, "transactions": 0, "cancelled_transactions": 0}
+    manifest = {
+        "schema_version": 1, "generated_at": generated.isoformat(), "release": release,
+        "districts": districts, "totals": totals,
+        "notes": "Public read-only snapshot with sorting values. Full forecasts use the live API."
+    }
     with psycopg.connect(row_factory=dict_row, connect_timeout=10) as db:
         # All exported files represent one consistent committed DB snapshot.
         db.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         homes = load_home_rows(db)
         group_rows = defaultdict(list)
         recent_rows = defaultdict(list)
+        home_keys = set()
         all_ids = set()
         by_name = {entry["name"]: entry["code"] for entry in districts}
         for home in homes:
-            district = home["address"].split(" ")[1]
+            district = home["complex_id"].split()[1]
+            if district != home["address"].split()[1]:
+                raise ValueError(f"District differs between ID and address: {home['complex_id']}")
             code = by_name.get(district)
             if code is None:
                 raise ValueError(f"Unknown district in complexes: {district}")
             all_ids.add(home["complex_id"])
+            home_keys.add((home["complex_id"], home["area_group"]))
             group_rows[code].append({key: value for key, value in home.items()
                                      if key not in {"marker_price_manwon", "trade_count", "last_trade", "sort_returns"}})
             recent_rows[code].append({key: home[key] for key in
@@ -125,7 +132,9 @@ def export(out):
             write_json(target / "complexes" / f"{code}.json", group_rows[code])
             write_json(target / "latest-trades" / f"{code}.json", recent_rows[code])
 
-        expected = db.execute("SELECT count(*) AS total FROM trades").fetchone()["total"]
+        expected = db.execute("""
+            SELECT count(*) AS total, count(*) FILTER (WHERE is_cancelled) AS cancelled FROM trades
+        """).fetchone()
         current_id = None
         area_groups = {}
         seen_ids = set()
@@ -148,6 +157,8 @@ def export(out):
             """)
             for row in cursor:
                 cid = row["complex_id"]
+                if (cid, row["area_group"]) not in home_keys:
+                    raise ValueError(f"Trade references an absent group: {cid}, {row['area_group']}")
                 if cid != current_id:
                     flush()
                     current_id = cid
@@ -157,29 +168,34 @@ def export(out):
                     ("contract_date", "area", "floor", "price_manwon", "is_cancelled")
                 })
                 totals["transactions"] += 1
+                totals["cancelled_transactions"] += int(row["is_cancelled"])
         flush()
-        if totals["transactions"] != expected:
-            raise RuntimeError(f"Transaction mismatch: JSON={totals['transactions']}, DB={expected}")
-        if not seen_ids.issubset(all_ids):
-            raise RuntimeError("Orphan trade complex_id; export not published")
+        if (totals["transactions"], totals["cancelled_transactions"]) != (expected["total"], expected["cancelled"]):
+            raise RuntimeError(f"PostgreSQL trade counts differ from the export: {expected}")
         for cid in all_ids - seen_ids:
             code = by_name[cid.split(" ")[1]]
             write_json(target / "transactions" / code / trade_filename(cid),
                        {"complex_id": cid, "area_groups": {}})
-        for entry in districts:
-            code = entry["code"]
-            if len(group_rows[code]) != len(recent_rows[code]):
-                raise RuntimeError(f"District group mismatch: {code}")
+        check(staging, manifest=manifest, db=db)
+    return manifest
 
-    manifest = {
-        "schema_version": 1, "generated_at": generated.isoformat(), "release": release,
-        "districts": districts, "totals": totals,
-        "notes": "Public read-only snapshot. User data and live HGB forecasts are not exported."
-    }
-    # Publish manifest only after every file is written and row counts match.
-    temp_manifest = out / "manifest.json.tmp"
-    write_json(temp_manifest, manifest)
-    temp_manifest.replace(out / "manifest.json")
+
+def export(out):
+    out.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=out, prefix=".snapshot-") as temporary:
+        staging = Path(temporary)
+        manifest = build_release(staging)
+        target = out / manifest["release"]
+        target.parent.mkdir(exist_ok=True)
+        (staging / manifest["release"]).rename(target)
+
+    # Each writer has its own temporary file. Verified files become visible via one manifest swap.
+    temp_manifest = out / f".manifest-{uuid4().hex}.tmp"
+    try:
+        write_json(temp_manifest, manifest)
+        temp_manifest.replace(out / "manifest.json")
+    finally:
+        temp_manifest.unlink(missing_ok=True)
     print(json.dumps(manifest, ensure_ascii=False))
 
 
