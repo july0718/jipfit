@@ -33,6 +33,8 @@ jobs:
         run: |
           npm install --include=dev --no-audit --no-fund
           npm run build
+      - name: Frontend Docker build
+        run: docker build frontend -t jipfit-feature19-web
   backend:
     runs-on: ubuntu-latest
     steps:
