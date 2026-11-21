@@ -4,3 +4,6 @@
 __pycache__/
 node_modules/
 pages-upload/
+
+# Generated, public read-only JSON snapshots
+frontend/public/data/
