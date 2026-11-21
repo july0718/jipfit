@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ForecastChart, TradeChart } from "./PriceCharts";
+import { readHomes, readTrades } from "./staticData";
 import Account from "./Account";
 import DistrictMap from "./DistrictMap";
 import Coordinates, { cachedPoint } from "./Coordinates";
@@ -64,7 +65,7 @@ function TradeHistory({ complexId, areaGroup }) {
     const controller = new AbortController();
     const params = new URLSearchParams({ complex_id: complexId, area_group: areaGroup });
     setError("");
-    readApi("/api/trades?" + params, controller.signal)
+    readTrades(complexId, areaGroup, controller.signal)
       .then(result => { if (!controller.signal.aborted) setRows(result); })
       .catch(err => { if (!controller.signal.aborted) setError(err.message); });
     return () => controller.abort();
@@ -92,7 +93,7 @@ function useComparedHome(item) {
     const controller = new AbortController();
     const params = new URLSearchParams({ complex_id: item.complex_id, area_group: item.area_group });
     const read = path => readApi(path + "?" + params, controller.signal);
-    Promise.all([read("/api/trades"), read("/api/complex"), item.predictable ? read("/api/predict") : null])
+    Promise.all([readTrades(item.complex_id, item.area_group, controller.signal), read("/api/complex"), item.predictable ? read("/api/predict") : null])
       .then(([rows, detail, forecast]) => {
         const trades = rows.filter(r => !r.is_cancelled);
         if (!controller.signal.aborted) setResult({ item, attempt, detail, forecast, count: trades.length, latest: trades[0] });
@@ -198,7 +199,7 @@ function App() {
   useEffect(() => {
     const controller = new AbortController();
     setListError("");
-    readApi("/api/complexes?include_sort=true", controller.signal).then(setHomes).catch(err => {
+    readHomes(controller.signal).then(setHomes).catch(err => {
       if (!controller.signal.aborted) setListError(err.message);
     });
     return () => controller.abort();
