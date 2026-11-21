@@ -32,8 +32,16 @@ def trade_filename(complex_id):
 
 def load_home_rows(db):
     # Same public response fields as GET /api/complexes?include_sort=true.
-    homes = db.execute("""
+    columns = {r["column_name"] for r in db.execute("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'complexes'
+    """)}
+    status_column = next((name for name in ("existence_status", "survival_status") if name in columns), None)
+    # Null means unknown; never infer demolition from absent coordinates.
+    status_expr = f'c."{status_column}"' if status_column else "NULL::text"
+    homes = db.execute(f"""
         SELECT c.complex_id,c.name,c.address,c.built,c.latitude,c.longitude,
+               {status_expr} AS existence_status,
                a.area_group,a.representative_area,
                (m.complex_id IS NOT NULL) AS predictable
         FROM complexes c JOIN area_groups a USING(complex_id)
