@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { clusterMarkers } from "./mapData";
+import { clusterMarkers, districtCenter } from "./mapData";
 import pendingCoordinateReviewIds from "./map-unverified-complexes.json";
 
 // Coordinates can be archived without marking a complex as currently existing.
@@ -81,14 +81,10 @@ function markerContent(c, selected) {
   return card.outerHTML;
 }
 
-function DistrictMap({ district, allComplexes, complexes, onSelect, selectedId, onViewport }) {
-  const center = React.useMemo(() => {
-    const points = allComplexes.filter(c => eligibleForMap(c) && c.latitude != null && c.longitude != null && c.address.split(" ")[1] === district);
-    if (!points.length) return [37.5665, 126.978];
-    return [points.reduce((s,c) => s + Number(c.latitude), 0) / points.length,
-            points.reduce((s,c) => s + Number(c.longitude), 0) / points.length];
-  }, [district, allComplexes]);
-  const [lat, lng] = center;
+function DistrictMap({ district, districtBounds, allComplexes, complexes, onSelect, selectedId, onViewport }) {
+  const center = React.useMemo(() =>
+    districtCenter(district, allComplexes, districtBounds), [district, allComplexes, districtBounds]);
+  const [lat, lng] = center || [37.5665, 126.978];
   const width = district ? 0.12 : 0.65;
   const height = district ? 0.09 : 0.42;
   const [limit, setLimit] = useState(20);
@@ -187,11 +183,11 @@ function DistrictMap({ district, allComplexes, complexes, onSelect, selectedId, 
   const centered = useRef(null);
   useEffect(() => {
     const map = instance.current;
-    if (!map || (district && !allComplexes.length) || centered.current === district) return;
+    if (!map || !center || centered.current === district) return;
     centered.current = district;
     map.setCenter(new maps.LatLng(lat, lng));
     map.setZoom(district ? 13 : 11);
-  }, [maps, district, allComplexes.length, lat, lng]);
+  }, [maps, district, center, lat, lng]);
   useEffect(() => { redraw.current?.(); }, [positioned, selectedId, limit]);
   const selectedPoint = positioned.find(item => item.complex_id === selectedId);
   const [showNearby,setShowNearby] = useState(false);
