@@ -8,6 +8,10 @@ on:
       - "backend/reference_band.py"
       - "backend/test_reference_band.py"
       - "backend/Dockerfile"
+      - "backend/evaluate_seoul_holdout.py"
+      - "backend/seoul_reference.py"
+      - "backend/test_seoul_reference.py"
+      - ".gitignore"
       - "tools/export_historical_reference.py"
       - "tools/test_export_historical_reference.py"
       - ".github/workflows/feature19-checks.yml"
@@ -44,9 +48,16 @@ jobs:
           python-version: '3.13'
       - name: Install test dependencies
         run: python -m pip install numpy pandas joblib
-      - name: Historical quantile tests
+      - name: Seoul pooled holdout validation tests
         working-directory: backend
-        run: python -m unittest test_reference_band -v
+        run: python -m unittest test_seoul_reference -v
+      - name: Validate optional published Seoul aggregate
+        run: |
+          if [ -f frontend/public/metadata/seoul-forecast-reference.json ]; then
+            python backend/seoul_reference.py frontend/public/metadata/seoul-forecast-reference.json
+          else
+            echo "Awaiting real Seoul holdout; no fabricated distribution."
+          fi
       - name: Static JSON exporter tests
         run: python -m unittest discover -s tools -p 'test_export_historical_reference.py' -v
       - name: Verify production audit static export
