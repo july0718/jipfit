@@ -1,5 +1,5 @@
 const methods = {
-  "/api/complex": "GET", "/api/trades": "GET", "/api/complexes": "GET", "/api/predict": "GET", "/api/account": "GET",
+  "/api/complex": "GET", "/api/trades": "GET", "/api/complexes": "GET", "/api/districts": "GET", "/api/predict": "GET", "/api/account": "GET",
   "/api/account/register": "POST", "/api/account/login": "POST",
   "/api/account/comparison": "POST", "/api/account/note": "POST", "/api/account/seen": "POST",
   "/api/account/logout": "POST", "/api/account/favorite": "POST"
@@ -8,24 +8,7 @@ const methods = {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (!url.pathname.startsWith("/api/")) {
-      const object = /^\/data\/objects\/[a-f0-9]{64}\.json$/.test(url.pathname);
-      if (env.PUBLIC_SNAPSHOTS && (object || url.pathname === "/data/manifest.json") &&
-          ["GET", "HEAD"].includes(request.method)) {
-        const file = await env.PUBLIC_SNAPSHOTS.get(url.pathname.slice("/data/".length));
-        if (file) return new Response(request.method === "HEAD" ? null : file.body, {headers: {
-          "Content-Type": "application/json; charset=utf-8",
-          "Cache-Control": object ? "public, max-age=31536000, immutable" : "no-store",
-          "ETag": file.httpEtag,
-        }});
-        if (object) return new Response(null, {status: 404});
-      }
-      const asset = await env.ASSETS.fetch(request);
-      if (url.pathname.startsWith("/data/") && asset.headers.get("Content-Type")?.includes("text/html")) {
-        return new Response(null, {status: 404, headers: {"Cache-Control": "no-store"}});
-      }
-      return asset;
-    }
+    if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
     const error = (detail, status) => Response.json({detail}, {status, headers: {"Cache-Control": "no-store"}});
     if (!methods[url.pathname]) return error("지원하지 않는 요청입니다.", 404);
     if (request.method !== methods[url.pathname]) return error("지원하지 않는 메서드입니다.", 405);

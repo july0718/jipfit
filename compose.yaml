@@ -36,8 +36,6 @@ services:
       retries: 20
   web:
     build: ./frontend
-    volumes:
-      - ./frontend/public/data:/usr/share/nginx/html/data:ro
     depends_on:
       api:
         condition: service_healthy
@@ -48,25 +46,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
-  snapshot:
-    profiles: ["snapshots"]
-    build: ./backend
-    command: ["python", "export_public_json.py", "--out", "/export"]
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      PGHOST: db
-      PGPORT: 5432
-      PGDATABASE: jipfit
-      PGUSER: jipfit
-      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    volumes:
-      - ./frontend/public/data:/export
   updater:
     profiles: ["updates"]
     build: ./backend
-    command: ["python", "-u", "refresh.py"]
+    command: ["python", "-u", "refresh.py", "--metadata-dir", "/metadata"]
     restart: unless-stopped
     depends_on:
       db:
@@ -78,32 +61,7 @@ services:
       PGUSER: jipfit
       PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       MOLIT_SERVICE_KEY: ${MOLIT_SERVICE_KEY:-}
-  public-updater:
-    profiles: ["public-updates"]
-    build: ./backend
-    command: ["python", "-u", "run_public_updates.py"]
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      PGHOST: db
-      PGPORT: 5432
-      PGDATABASE: jipfit
-      PGUSER: jipfit
-      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      MOLIT_SERVICE_KEY: ${MOLIT_SERVICE_KEY:-}
-      JIPFIT_PUBLISH_R2: ${JIPFIT_PUBLISH_R2:-0}
-      R2_ENDPOINT: ${R2_ENDPOINT:-}
-      R2_BUCKET: ${R2_BUCKET:-}
-      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
-      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
     volumes:
-      - ./frontend/public/data:/export
       - ./verified-metadata:/metadata:ro
 volumes:
   jipfit_pg:
-
-
-
-

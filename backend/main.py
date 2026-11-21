@@ -44,8 +44,27 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/districts")
+def list_districts():
+    with connect() as db:
+        areas = db.execute("""
+            SELECT split_part(complex_id, ' ', 2) AS name,
+                   min(latitude) AS south, min(longitude) AS west,
+                   max(latitude) AS north, max(longitude) AS east
+            FROM complexes
+            WHERE latitude BETWEEN 33 AND 39 AND longitude BETWEEN 124 AND 132
+            GROUP BY 1
+        """).fetchall()
+    bounds = {row["name"]: [row[k] for k in ("south", "west", "north", "east")] for row in areas}
+    return [{"code": code, "name": name, "bounds": bounds.get(name)}
+            for code, name in DISTRICTS.items()]
+
+
 @app.get("/api/complexes")
-def list_complexes(include_sort: bool = False):
+def list_complexes(include_sort: bool = False, district: str | None = None):
+    if district is not None and district not in DISTRICTS.values():
+        raise HTTPException(422, "지원하지 않는 자치구입니다.")
+    scope = (district, district)
     with connect() as db:
         rows = db.execute("""
             SELECT c.complex_id, c.name, c.address, c.latitude, c.longitude, c.existence_status,
@@ -54,24 +73,29 @@ def list_complexes(include_sort: bool = False):
             FROM complexes c JOIN area_groups a USING (complex_id)
             LEFT JOIN district_input_months d ON d.district=split_part(c.complex_id,' ',2)
             LEFT JOIN model_inputs m ON m.complex_id=c.complex_id AND m.area_group=a.area_group AND m.month=d.month
+            WHERE (%s::text IS NULL OR split_part(c.complex_id, ' ', 2) = %s)
             ORDER BY c.name, c.complex_id, a.area_group
-        """).fetchall()
+        """, scope).fetchall()
         if not include_sort:
             return rows
         stats = {r["complex_id"]: r for r in db.execute("""
             SELECT complex_id, count(*) AS trade_count, max(contract_date) AS last_trade
-            FROM trades WHERE NOT is_cancelled GROUP BY complex_id
-        """)}
+            FROM trades
+            WHERE NOT is_cancelled AND (%s::text IS NULL OR split_part(complex_id, ' ', 2) = %s)
+            GROUP BY complex_id
+        """, scope)}
         last_prices = {(r["complex_id"], r["area_group"]): r["price_manwon"] for r in db.execute("""
             SELECT DISTINCT ON (complex_id, area_group) complex_id, area_group, price_manwon
-            FROM trades WHERE NOT is_cancelled
+            FROM trades
+            WHERE NOT is_cancelled AND (%s::text IS NULL OR split_part(complex_id, ' ', 2) = %s)
             ORDER BY complex_id, area_group, contract_date DESC, trade_id DESC
-        """)}
+        """, scope)}
         inputs = db.execute("""
             SELECT DISTINCT ON (complex_id) m.* FROM model_inputs m
             JOIN district_input_months d ON d.district=split_part(m.complex_id,' ',2) AND m.month=d.month
+            WHERE (%s::text IS NULL OR d.district = %s)
             ORDER BY complex_id, area_group
-        """).fetchall()
+        """, scope).fetchall()
     returns = {}
     if inputs:
         for row, rates in zip(inputs, predict_growth(app.state.model, inputs), strict=True):
