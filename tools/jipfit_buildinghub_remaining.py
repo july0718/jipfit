@@ -305,6 +305,8 @@ def explicitly_failed(node: Any, depth=0) -> bool:
             k = key.lower()
             if k in {"status", "state"} and str(value).lower() in {"error", "failed", "failure", "partial", "incomplete"}:
                 return True
+            if k in {"success", "ok", "complete", "completed"} and value is False:
+                return True
             if k in {"resultcode", "returnreasoncode"} and str(value) not in SUCCESS_CODES:
                 return True
             if k in {"error", "exception", "failure"} and value not in (None, "", False, [], {}):
@@ -386,6 +388,9 @@ def run(args) -> int:
     print(f"PREVIOUS completed_json={len(saved)} remaining_valid={len(pending)}")
     print(f"RESULTS {results}")
     if args.dry_run:
+        for p in saved[:3]:
+            sample = json.loads((results / p.filename).read_text(encoding="utf-8-sig"))
+            print("EXISTING_JSON_SAMPLE", p.filename, "keys=", list(sample)[:16])
         if invalid:
             print("INVALID TARGETS (first 10)", json.dumps(invalid[:10], ensure_ascii=False))
         return 0
