@@ -5,7 +5,7 @@ let homesPromise;
 
 async function readJSON(url, signal) {
   const response = await fetch(url, { signal });
-  if (!response.ok) throw new Error("JSON 조회 실패 (HTTP " + response.status + "): " + url);
+  if (!response.ok) { const error = new Error("JSON 조회 실패 (HTTP " + response.status + "): " + url); error.status = response.status; throw error; }
   return response.json();
 }
 
@@ -19,10 +19,18 @@ export async function getManifest(signal) {
   return manifestPromise;
 }
 
+async function liveAPI(url, signal) {
+  const response = await fetch(url, { signal, cache: "no-store" });
+  if (!response.ok) throw new Error("API 조회 실패 (HTTP " + response.status + ")");
+  return response.json();
+}
+
 export async function readHomes(signal) {
   if (!homesPromise) {
     homesPromise = (async () => {
-      const manifest = await getManifest(signal);
+      let manifest;
+      try { manifest = await getManifest(signal); }
+      catch (error) { if (error.status === 404) return liveAPI("/api/complexes?include_sort=true", signal); throw error; }
       if (manifest.schema_version !== 1) throw new Error("지원하지 않는 JSON 버전입니다.");
       const path = base + manifest.release + "/";
       const chunks = await Promise.all(manifest.districts.map(async ({code}) => {
@@ -52,7 +60,12 @@ async function encodedID(id) {
 }
 
 export async function readTrades(complexId, areaGroup, signal) {
-  const manifest = await getManifest(signal);
+  let manifest;
+  try { manifest = await getManifest(signal); }
+  catch (error) {
+    if (error.status === 404) return liveAPI("/api/trades?" + new URLSearchParams({complex_id: complexId, area_group: areaGroup}), signal);
+    throw error;
+  }
   const district = complexId.split(" ")[1];
   const code = manifest.districts.find(entry => entry.name === district)?.code;
   if (!code) throw new Error("단지 소재 자치구를 확인할 수 없습니다.");
