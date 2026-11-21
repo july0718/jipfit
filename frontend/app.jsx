@@ -35,7 +35,7 @@ async function readForecast(params, signal) {
 
 const seoulTime = value => new Date(value).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
 
-function ComplexDetail({ id }) {
+function ComplexDetail({ id, built }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -47,7 +47,7 @@ function ComplexDetail({ id }) {
   }, [id]);
   if (error) return <p role="alert">단지 상세 조회 실패 · {error}</p>;
   if (!detail) return <p>단지 상세 조회 중…</p>;
-  return <p>{detail.built}년 준공 · 거래 동기화 {detail.last_sync_at ? seoulTime(detail.last_sync_at) + " (한국시간)" : "기록 없음"}</p>;
+  return <p>{built === undefined ? detail.built : built}년 준공 · 거래 동기화 {detail.last_sync_at ? seoulTime(detail.last_sync_at) + " (한국시간)" : "기록 없음"}</p>;
 }
 
 function Results({ home, data }) {
@@ -130,7 +130,7 @@ function Comparison({ items, months, setMonths, remove, close }) {
     ["예측 기준월", d => d.forecast ? d.forecast.as_of + (d.forecast.pilot ? " · 시범" : "") : "—"],
     ["전용면적군", d => d.item.area_group + "㎡군"],
     ["모델 대표면적", d => d.forecast ? d.forecast.representative_area + "㎡" : "—"],
-    ["준공연도", d => d.detail.built + "년"],
+    ["준공연도", d => (d.item.built === undefined ? d.detail.built : d.item.built) + "년"],
     ["현재 기준가격", d => d.forecast ? money(d.forecast.reference_price_manwon) : "산정값 없음"],
     [months + "개월 후 예상가격", (_, f) => f ? money(f.price_manwon) : "예측 없음"],
     ["예상 가격상승률", (_, f) => f ? percent.format(f.return_percent) + "%" : "—"],
@@ -315,7 +315,7 @@ function App() {
               </div>}</>}
       </section>
       <section className="panel result" aria-label="예측 결과" aria-live="polite">
-        {selected && <ComplexDetail key={selected.complex_id} id={selected.complex_id}/>}
+        {selected && <ComplexDetail key={selected.complex_id} id={selected.complex_id} built={selected.built}/>}
         {selected && <label>면적군
           <select value={home.area_group} onChange={e => select(selected.groups.find(g => g.area_group === Number(e.target.value)))}>
             {selected.groups.map(g => <option key={g.area_group} value={g.area_group}>
@@ -338,4 +338,3 @@ function App() {
 }
 
 createRoot(document.getElementById("root")).render(<App/>);
-

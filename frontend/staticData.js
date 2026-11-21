@@ -46,10 +46,23 @@ export async function readDistricts() {
   return (await getCatalog()).districts;
 }
 
-function districtHomes(name) {
+async function hybridDistrict(name, code) {
+  const query = new URLSearchParams({include_sort: "true", district: name});
+  const full = () => readJSON("/api/complexes?" + query);
+  if (!code) return full();
+  const metadata = await readJSON("/metadata/" + code + ".json", {cache: "no-cache"}).catch(() => null);
+  if (!Array.isArray(metadata)) return full();
+  const byId = new Map(metadata.map(item => [item.complex_id, item]));
+  const rows = await readJSON("/api/complexes?" + query + "&live_only=true");
+  // New complexes can be traded before the next monthly metadata export.
+  const missing = rows.some(row => !byId.has(row.complex_id) && !row.address);
+  const source = missing ? await full() : rows;
+  return source.map(row => ({...row, ...byId.get(row.complex_id)}));
+}
+
+function districtHomes(name, code) {
   if (!homesCache.has(name)) {
-    const query = new URLSearchParams({include_sort: "true", district: name});
-    homesCache.set(name, readJSON("/api/complexes?" + query).catch(error => {
+    homesCache.set(name, hybridDistrict(name, code).catch(error => {
       homesCache.delete(name);
       throw error;
     }));
@@ -63,9 +76,9 @@ export async function readHomes(names, signal) {
   const {scoped, districts} = await getCatalog();
   signal?.throwIfAborted();
   const scope = new Set(names);
-  const useDistricts = scoped && !liveHomesPromise && scope.size < districts.length;
+  const useDistricts = scoped && !liveHomesPromise;
   const result = useDistricts
-    ? (await Promise.all([...scope].map(districtHomes))).flat()
+    ? (await Promise.all([...scope].map(name => districtHomes(name, districts.find(d => d.name === name)?.code)))).flat()
     : (await getLiveHomes()).filter(row => scope.has(districtOf(row.complex_id)));
   signal?.throwIfAborted();
   return result;

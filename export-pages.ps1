@@ -11,4 +11,5 @@ foreach ($name in @("index.html", "app.js", "style.css", "config.js")) {
     [IO.File]::WriteAllBytes((Join-Path $out $name), $asset.RawContentStream.ToArray())
 }
 Copy-Item (Join-Path $root "frontend/_worker.js") $out
+Copy-Item (Join-Path $root "frontend/public/metadata") $out -Recurse -Force
 Write-Host $out

@@ -16,19 +16,23 @@ test("first view requests only the selected district and revisits reuse its resp
   t.mock.method(globalThis, "fetch", async url => {
     seen.push(url);
     if (url === "/api/districts") return reflect(districts);
+    if (url.startsWith("/metadata/")) {
+      const name = districts.find(d => url.includes(d.code)).name;
+      return reflect([{...row(name), built: 2000}]);
+    }
     const query = new URL(url, "http://localhost").searchParams;
     return reflect([row(query.get("district"))]);
   });
   const {readDistricts, readHomes} = await fresh("scoped");
   const [catalog, initial] = await Promise.all([readDistricts(), readHomes(["광진구"])]);
   assert.deepEqual(catalog, districts);
-  assert.deepEqual(initial, [row("광진구")]);
-  assert.equal(seen.length, 2);
-  assert.deepEqual(await readHomes(["광진구"]), initial);
-  assert.equal(seen.length, 2);
-  assert.deepEqual(await readHomes(["강서구"]), [row("강서구")]);
+  assert.deepEqual(initial, [{...row("광진구"), built: 2000}]);
   assert.equal(seen.length, 3);
-  assert.ok(seen.every(url => url.startsWith("/api/")));
+  assert.deepEqual(await readHomes(["광진구"]), initial);
+  assert.equal(seen.length, 3);
+  assert.deepEqual(await readHomes(["강서구"]), [{...row("강서구"), built: 2000}]);
+  assert.equal(seen.length, 5);
+  assert.ok(seen.some(url => url.includes("live_only=true")));
 });
 
 test("a missing district endpoint uses the existing DB endpoint only once", async t => {
@@ -49,7 +53,7 @@ test("an aborted request does not invalidate the shared district response", asyn
   const controller = new AbortController();
   let resolveRows;
   const started = new Promise(resolve => { resolveRows = resolve; });
-  t.mock.method(globalThis, "fetch", url => url === "/api/districts" ? reflect(districts) : started);
+  t.mock.method(globalThis, "fetch", url => url === "/api/districts" ? reflect(districts) : url.startsWith("/metadata/") ? reflect([{complex_id: row("광진구").complex_id}]) : started);
   const {readDistricts, readHomes} = await fresh("abort");
   await readDistricts();
   const cancelled = readHomes(["광진구"], controller.signal);
