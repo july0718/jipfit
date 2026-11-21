@@ -76,3 +76,7 @@ thead th { color:#51645e; font-size:14px; }
 .range-filters div { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .35rem; margin-bottom: .65rem; }
 .range-filters span, .range-filters small { grid-column: 1 / -1; }
 .range-filters input { box-sizing: border-box; width: 100%; min-width: 0; }
+
+.facility-details { display:grid; grid-template-columns:auto 1fr; gap:.4rem .8rem; margin:.5rem 0; }
+.facility-details dd { margin:0; }
+.facility-marker { display:block; width:max-content; padding:3px 6px; border:1px solid #644425; background:#fff8de; color:#402919; border-radius:5px; }

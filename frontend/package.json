@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "esbuild app.jsx --bundle --minify --outfile=dist/app.js"
+    "build": "node build-facilities.mjs && esbuild app.jsx --bundle --minify --outfile=dist/app.js"
   },
   "dependencies": {
     "react": "18.3.1",
