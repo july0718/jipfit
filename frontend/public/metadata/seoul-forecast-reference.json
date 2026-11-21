@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "kind": "seoul_hgb_holdout",
+  "scope": "서울 25개 자치구 통합 HGB 과거 홀드아웃",
+  "training_cutoff": "2025-04",
+  "holdout_start": "2025-04",
+  "holdout_end": "2025-09",
+  "as_of": "2026-11",
+  "model_sha256": "68fc53fb7c150bc3d41055a4bd2e5d6d8659b472032bf79b178d6c4e219f7ade",
+  "calibrated_for_current_model": false,
+  "method": "실제 수익률 - 과거 서울 통합 HGB 예측 수익률의 10·90백분위(%p)",
+  "horizons": [
+    {
+      "months": 3,
+      "sample_count": 23255,
+      "p10_pp": -4.084062357599714,
+      "p90_pp": 17.39102527844953,
+      "mae_pp": 7.633963915762447,
+      "bias_pp": -5.190462911315502
+    },
+    {
+      "months": 6,
+      "sample_count": 21899,
+      "p10_pp": -4.1253892120777085,
+      "p90_pp": 24.500407283466163,
+      "mae_pp": 10.832451414707895,
+      "bias_pp": -8.55304930259702
+    },
+    {
+      "months": 12,
+      "sample_count": 22042,
+      "p10_pp": -4.774337755123106,
+      "p90_pp": 32.533058304804754,
+      "mae_pp": 15.538312548145043,
+      "bias_pp": -12.918970658353057
+    }
+  ]
+}
