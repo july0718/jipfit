@@ -10,5 +10,15 @@ foreach ($name in @("index.html", "app.js", "style.css", "config.js")) {
     }
     [IO.File]::WriteAllBytes((Join-Path $out $name), $asset.RawContentStream.ToArray())
 }
+$sourceData = Join-Path $root "frontend/public/data"
+$manifest = Join-Path $sourceData "manifest.json"
+if (Test-Path $manifest) {
+    $targetData = Join-Path $out "data"
+    if (Test-Path $targetData) { Remove-Item $targetData -Recurse -Force }
+    Copy-Item $sourceData $targetData -Recurse
+    Write-Host "Included versioned JSON snapshots"
+} else {
+    Write-Warning "No JSON manifest; web will use API fallback."
+}
 Copy-Item (Join-Path $root "frontend/_worker.js") $out
 Write-Host $out
