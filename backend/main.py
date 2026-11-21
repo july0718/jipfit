@@ -61,13 +61,14 @@ def list_districts():
 
 
 @app.get("/api/complexes")
-def list_complexes(include_sort: bool = False, district: str | None = None):
+def list_complexes(include_sort: bool = False, district: str | None = None, live_only: bool = False):
     if district is not None and district not in DISTRICTS.values():
         raise HTTPException(422, "지원하지 않는 자치구입니다.")
+    metadata = "" if live_only else "c.name, c.address, c.built, c.latitude, c.longitude, c.existence_status,"
     scope = (district, district)
     with connect() as db:
-        rows = db.execute("""
-            SELECT c.complex_id, c.name, c.address, c.latitude, c.longitude, c.existence_status,
+        rows = db.execute(f"""
+            SELECT c.complex_id, {metadata}
                    a.area_group, a.representative_area,
                    (m.complex_id IS NOT NULL) AS predictable
             FROM complexes c JOIN area_groups a USING (complex_id)
@@ -162,7 +163,3 @@ def predict(complex_id: str = Query(min_length=1), area_group: int = Query(gt=0)
     result["pilot"] = complex_id.split(" ")[1] != "광진구"
     result["calculated_at"] = datetime.now(timezone.utc)
     return result
-
-
-
-

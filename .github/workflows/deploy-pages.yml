@@ -3,6 +3,8 @@ name: Deploy Jipfit to Cloudflare Pages
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: '30 22 1 * *' # 2nd day of each month, 07:30 Asia/Seoul
   workflow_dispatch:
 
 permissions:
@@ -15,6 +17,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: 저장소 코드 받기
@@ -25,11 +29,26 @@ jobs:
         with:
           node-version: '22'
 
+      - name: 월간 단지 기본정보 갱신
+        if: github.event_name == 'schedule'
+        env:
+          PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+        run: |
+          node tools/monthly-metadata.mjs "https://${PAGES_PROJECT}.pages.dev" frontend/public/metadata
+          git add frontend/public/metadata
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Refresh monthly complex metadata"
+            git push origin HEAD:main
+          fi
+
       - name: React 빌드 및 Pages 배포 폴더 준비
         working-directory: frontend
         run: |
           npm install --include=dev --no-audit --no-fund
           npm run build
+          cp -r public/metadata dist/metadata
           cp index.html style.css config.js _worker.js dist/
 
       - name: 기존 Cloudflare Pages 프로젝트에 배포
