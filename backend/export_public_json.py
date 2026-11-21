@@ -7,7 +7,7 @@ The manifest is published last. No trade rows are modified or deleted.
 import argparse
 from collections import defaultdict
 from datetime import datetime, timezone
-from math import exp, expm1, isfinite
+from math import expm1, isfinite
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -65,8 +65,6 @@ def load_home_rows(db):
           ON d.district=split_part(m.complex_id,' ',2) AND m.month=d.month
         ORDER BY complex_id,area_group
     """).fetchall()
-    units = {(r["complex_id"], r["area_group"]): exp(float(r["log_current"]))
-             for r in inputs}
     returns = {}
     if inputs:
         model = load_model()
@@ -78,9 +76,7 @@ def load_home_rows(db):
     for home in homes:
         cid = home["complex_id"]
         key = (cid, home["area_group"])
-        reference = units.get(key)
-        marker_price = (reference * float(home["representative_area"])
-                        if reference is not None else prices.get(key))
+        marker_price = prices.get(key)
         if marker_price is not None and not isfinite(float(marker_price)):
             marker_price = None
         home["marker_price_manwon"] = marker_price
@@ -129,7 +125,14 @@ def build_release(staging):
         totals["complexes"] = len(all_ids)
         for entry in districts:
             code = entry["code"]
-            write_json(target / "complexes" / f"{code}.json", group_rows[code])
+            rows = group_rows[code]
+            points = [(float(h["latitude"]), float(h["longitude"])) for h in rows
+                      if h["latitude"] is not None and h["longitude"] is not None
+                      and isfinite(float(h["latitude"])) and isfinite(float(h["longitude"]))]
+            if points:
+                lat, lng = zip(*points)
+                entry["bounds"] = [min(lat), min(lng), max(lat), max(lng)]
+            write_json(target / "complexes" / f"{code}.json", rows)
             write_json(target / "latest-trades" / f"{code}.json", recent_rows[code])
 
         expected = db.execute("""

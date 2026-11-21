@@ -2,6 +2,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
+import re
 import json
 import statistics
 import time
@@ -21,17 +22,27 @@ def snapshot_path(manifest, path):
     return f"/data/{manifest['release']}/{path}"
 
 
-def snapshot_homes(origin, pool):
+def object_path(digest):
+    if not re.fullmatch(r"[a-f0-9]{64}", digest):
+        raise ValueError("Invalid snapshot object digest")
+    return f"/data/objects/{digest}.json"
+
+
+def snapshot_homes(origin, pool, district_name):
     manifest, size = fetch(origin, "/data/manifest.json")
-    if manifest["schema_version"] != 1 or len(manifest["districts"]) != 25:
+    if manifest["schema_version"] not in (1, 2) or len(manifest["districts"]) != 25:
         raise ValueError("Expected a Seoul snapshot")
-    paths = [snapshot_path(manifest, f"{kind}/{d['code']}.json")
-             for d in manifest["districts"] for kind in ("complexes", "latest-trades")]
-    files = list(pool.map(lambda path: fetch(origin, path), paths))
-    groups = sum(len(payload) for payload, _ in files[::2])
-    if groups != manifest["totals"]["area_groups"]:
-        raise ValueError("Unexpected snapshot group count")
-    return groups, size + sum(length for _, length in files), 1 + len(paths)
+    district = next(d for d in manifest["districts"] if d["name"] == district_name)
+    if manifest["schema_version"] == 2:
+        paths = [object_path(district[field]) for field in ("complexes", "latest")]
+    else:
+        paths = [snapshot_path(manifest, f"{kind}/{district['code']}.json")
+                 for kind in ("complexes", "latest-trades")]
+    (homes, homes_size), (prices, prices_size) = pool.map(lambda path: fetch(origin, path), paths)
+    keys = {(row["complex_id"], row["area_group"]) for row in homes}
+    if len(keys) != len(homes) or keys != {(row["complex_id"], row["area_group"]) for row in prices}:
+        raise ValueError("Snapshot area groups differ from latest prices")
+    return keys, size + homes_size + prices_size, 3
 
 
 def measure(request, repeat):
@@ -55,23 +66,30 @@ def compare(args):
     predict_path = "/api/predict?" + params
     manifest, _ = fetch(candidate, "/data/manifest.json")
     district = args.complex_id.split()[1]
-    code = next(entry["code"] for entry in manifest["districts"] if entry["name"] == district)
+    entry = next(entry for entry in manifest["districts"] if entry["name"] == district)
     digest = sha256(args.complex_id.encode("utf-8")).hexdigest()
-    trade_path = snapshot_path(manifest, f"transactions/{code}/{digest}.json")
 
     def snapshot_trades():
+        index_size = 0
+        if manifest["schema_version"] == 2:
+            index, index_size = fetch(candidate, object_path(entry["history"]))
+            trade_path = object_path(index[digest])
+        else:
+            trade_path = snapshot_path(manifest, f"transactions/{entry['code']}/{digest}.json")
         payload, size, count = single(candidate, trade_path)
         if payload["complex_id"] != args.complex_id:
             raise ValueError("Unexpected trade complex ID")
-        return payload["area_groups"].get(str(args.area_group), []), size, count
+        return payload["area_groups"].get(str(args.area_group), []), size + index_size, count + bool(index_size)
 
     def baseline_homes():
         homes, size, count = single(baseline, "/api/complexes?include_sort=true")
-        return len(homes), size, count
+        keys = {(row["complex_id"], row["area_group"]) for row in homes
+                if row["complex_id"].split()[1] == district}
+        return keys, size, count
 
     with ThreadPoolExecutor(max_workers=args.parallel) as pool:
         pairs = {
-            "cold_homes": (baseline_homes, lambda: snapshot_homes(candidate, pool)),
+            "cold_district_homes": (baseline_homes, lambda: snapshot_homes(candidate, pool, district)),
             "selected_trade_history": (lambda: single(baseline, "/api/trades?" + params), snapshot_trades),
             "live_prediction": (lambda: single(baseline, predict_path), lambda: single(candidate, predict_path)),
         }

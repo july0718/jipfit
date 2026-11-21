@@ -9,6 +9,17 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) {
+      const object = /^\/data\/objects\/[a-f0-9]{64}\.json$/.test(url.pathname);
+      if (env.PUBLIC_SNAPSHOTS && (object || url.pathname === "/data/manifest.json") &&
+          ["GET", "HEAD"].includes(request.method)) {
+        const file = await env.PUBLIC_SNAPSHOTS.get(url.pathname.slice("/data/".length));
+        if (file) return new Response(request.method === "HEAD" ? null : file.body, {headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": object ? "public, max-age=31536000, immutable" : "no-store",
+          "ETag": file.httpEtag,
+        }});
+        if (object) return new Response(null, {status: 404});
+      }
       const asset = await env.ASSETS.fetch(request);
       if (url.pathname.startsWith("/data/") && asset.headers.get("Content-Type")?.includes("text/html")) {
         return new Response(null, {status: 404, headers: {"Cache-Control": "no-store"}});

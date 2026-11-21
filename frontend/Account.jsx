@@ -25,7 +25,7 @@ function NoteEditor({ initial, busy, save, label }) {
     <button disabled={busy}>메모 저장</button></form>;
 }
 
-export default function Account({home, homes, onSelect, compared, horizon, onOpenComparison}) {
+function Account({home, homes, resolveHome, onSelect, compared, horizon, onOpenComparison}) {
   const [profile, setProfile] = useState(guest);
   const [mode, setMode] = useState("");
   const [message, setMessage] = useState("");
@@ -78,6 +78,18 @@ export default function Account({home, homes, onSelect, compared, horizon, onOpe
 
   const saved = home && profile.favorites.some(f => f.complex_id === home.complex_id && f.area_group === home.area_group);
   const lookup = (id, area) => homes?.find(g => g.complex_id === id && (area == null || g.area_group === area));
+  async function openSaved(keys, action) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const items = await Promise.all(keys.map(([id, area]) => lookup(id, area) || resolveHome(id, area)));
+      action(items);
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
   const notes = profile.notes || [];
   const note = notes.find(n => n.complex_id === home?.complex_id)?.note || "";
   const notifications = profile.favorites.filter(f => f.new_trades > 0 || f.new_month);
@@ -99,15 +111,14 @@ export default function Account({home, homes, onSelect, compared, horizon, onOpe
       })}>{home.name} {home.area_group}㎡ {saved ? "관심 해제" : "관심 등록"}</button>}
       {profile.favorites.length === 0 ? <p>단지와 면적군을 선택해 관심 목록에 저장하세요.</p>
         : <ul>{profile.favorites.map(f => {
-          const item = homes?.find(g => g.complex_id === f.complex_id && g.area_group === f.area_group);
-          return <li key={JSON.stringify([f.complex_id,f.area_group])}><button disabled={!item || busy}
-            onClick={() => onSelect(item)}>{f.name} · {f.area_group}㎡</button> <small>{f.address}</small></li>;
+          return <li key={JSON.stringify([f.complex_id,f.area_group])}><button disabled={busy}
+            onClick={() => openSaved([[f.complex_id, f.area_group]], ([item]) => onSelect(item))}>{f.name} · {f.area_group}㎡</button> <small>{f.address}</small></li>;
         })}</ul>}
       <h3>단지 메모</h3>
       {home && <NoteEditor key={JSON.stringify([profile.username,home.complex_id,note])} initial={note} busy={busy}
         label={home.name + " 메모"} save={text => submit("/note", {complex_id:home.complex_id, note:text})}/>}
-      {notes.map(n => <p key={n.complex_id}><button disabled={!lookup(n.complex_id) || busy}
-        onClick={() => onSelect(lookup(n.complex_id))}>{lookup(n.complex_id)?.name || n.complex_id}</button> {n.note}</p>)}
+      {notes.map(n => <p key={n.complex_id}><button disabled={busy}
+        onClick={() => openSaved([[n.complex_id]], ([item]) => onSelect(item))}>{lookup(n.complex_id)?.name || n.complex_id}</button> {n.note}</p>)}
       <h3>저장한 비교</h3>
       {compared.length === 2 && <button disabled={busy} onClick={() => submit("/comparison", {
         left_id:compared[0].complex_id, left_area:compared[0].area_group,
@@ -117,7 +128,7 @@ export default function Account({home, homes, onSelect, compared, horizon, onOpe
       {(profile.comparisons || []).map(c => {
         const left = lookup(c.left_id,c.left_area), right = lookup(c.right_id,c.right_area);
         return <div className="saved-comparison" key={JSON.stringify([profile.username,c.left_id,c.left_area,c.right_id,c.right_area,c.months])}>
-          <button disabled={!left || !right || busy} onClick={() => onOpenComparison([left,right], c.months)}>
+          <button disabled={busy} onClick={() => openSaved([[c.left_id,c.left_area], [c.right_id,c.right_area]], items => onOpenComparison(items, c.months))}>
             {left?.name || c.left_id} {c.left_area}㎡군 · {right?.name || c.right_id} {c.right_area}㎡군 · {c.months}개월 열기</button>
           <button disabled={busy} onClick={() => submit("/comparison", {...c,save:false})}>비교 삭제</button>
           <NoteEditor key={c.note} label="비교 메모" initial={c.note} busy={busy}
@@ -135,3 +146,5 @@ export default function Account({home, homes, onSelect, compared, horizon, onOpe
     {message && <p role="alert">{message}</p>}
   </section>;
 }
+
+export default React.memo(Account);

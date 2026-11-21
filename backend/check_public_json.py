@@ -52,9 +52,19 @@ def verify_database(db, home_keys, digests):
     require(not digests, "JSON contains trade groups missing from PostgreSQL")
 
 
+def read_object(root, digest):
+    require(isinstance(digest, str) and re.fullmatch(r"[a-f0-9]{64}", digest),
+            "Invalid snapshot object reference")
+    path = root / "objects" / f"{digest}.json"
+    body = path.read_bytes()
+    require(sha256(body).hexdigest() == digest, f"Snapshot object checksum mismatch: {digest}")
+    return json.loads(body)
+
+
 def check(root, *, manifest=None, db=None):
     manifest = read(root / "manifest.json") if manifest is None else manifest
-    require(manifest["schema_version"] == 1 and
+    version = manifest["schema_version"]
+    require(version in (1, 2) and
             re.fullmatch(r"releases/[0-9]{8}T[0-9]{12}Z", manifest["release"]),
             "Unsupported or invalid release path")
     release = root / manifest["release"]
@@ -68,9 +78,16 @@ def check(root, *, manifest=None, db=None):
     home_keys = set()
     digests = {}
     expected_files = set()
+    by_code = {district["code"]: district for district in districts}
     for code, name in DISTRICTS.items():
-        homes = read(release / "complexes" / f"{code}.json")
-        recent = read(release / "latest-trades" / f"{code}.json")
+        district = by_code[code]
+        if version == 2:
+            homes = read_object(root, district["complexes"])
+            recent = read_object(root, district["latest"])
+            history = read_object(root, district["history"])
+        else:
+            homes = read(release / "complexes" / f"{code}.json")
+            recent = read(release / "latest-trades" / f"{code}.json")
         keys = {(home["complex_id"], home["area_group"]) for home in homes}
         recent_keys = {(row["complex_id"], row["area_group"]) for row in recent}
         require(keys and len(homes) == len(keys) == len(recent) and keys == recent_keys,
@@ -83,10 +100,17 @@ def check(root, *, manifest=None, db=None):
             require(cid.split()[1] == name, f"{cid}: incorrect district {code}")
             areas.setdefault(cid, set()).add(str(group))
         totals["complexes"] += len(areas)
+        if version == 2:
+            require(set(history) == {trade_filename(cid)[:-5] for cid in areas},
+                    f"{code}: history index differs from the listed complexes")
         for cid, groups in areas.items():
-            path = release / "transactions" / code / trade_filename(cid)
-            expected_files.add(path)
-            payload = read(path)
+            filename = trade_filename(cid)
+            if version == 2:
+                payload = read_object(root, history[filename[:-5]])
+            else:
+                path = release / "transactions" / code / filename
+                expected_files.add(path)
+                payload = read(path)
             require(payload["complex_id"] == cid, f"{cid}: incorrect transaction file")
             require(set(payload["area_groups"]) <= groups, f"{cid}: unknown trade group")
             for group, rows in payload["area_groups"].items():
@@ -104,8 +128,9 @@ def check(root, *, manifest=None, db=None):
                 if db is not None:
                     digests[(cid, int(group))] = trade_digest(rows)
 
-    require(set((release / "transactions").rglob("*.json")) == expected_files,
-            "Unexpected transaction files")
+    if version == 1:
+        require(set((release / "transactions").rglob("*.json")) == expected_files,
+                "Unexpected transaction files")
     require(dict(totals) == manifest["totals"], f"File totals differ from manifest: {totals}")
     if db is not None:
         verify_database(db, home_keys, digests)

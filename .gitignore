@@ -7,3 +7,6 @@ pages-upload/
 
 # Generated, public read-only JSON snapshots
 frontend/public/data/
+
+# Local verified metadata and evidence batches
+/verified-metadata/
