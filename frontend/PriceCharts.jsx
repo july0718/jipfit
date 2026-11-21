@@ -1,18 +1,18 @@
 import React, { useMemo } from "react";
 
-function PriceChart({ title, points, forecast = false }) {
+function PriceChart({ title, points, forecast = false, rate = false }) {
   if (!points.length) return <p>{title}에 표시할 유효 거래가 없습니다.</p>;
   const first = points[0].time;
   const last = points[points.length - 1].time;
-  const prices = points.map(p => p.price / 10000);
+  const prices = points.map(p => rate ? p.rate : p.price / 10000);
   const bottom = Math.min(...prices);
   const top = Math.max(...prices);
   const padding = Math.max((top - bottom) * 0.1, 0.02);
-  const low = Math.max(0, bottom - padding);
+  const low = rate ? bottom - padding : Math.max(0, bottom - padding);
   const high = top + padding;
   const x = time => first === last ? 250 : 54 + (time - first) / (last - first) * 384;
   const y = price => 145 - (price - low) / (high - low) * 122;
-  return <figure className="price-chart"><figcaption>{title} (억 원)</figcaption>
+  return <figure className="price-chart"><figcaption>{title} ({rate ? "%" : "억 원"})</figcaption>
     <svg viewBox="0 0 480 178" role="img" aria-label={title}>
       {[low, (low + high) / 2, high].map(v => <g key={v}>
         <line x1="54" x2="438" y1={y(v)} y2={y(v)} stroke="#d5dfdd"/>
@@ -23,7 +23,7 @@ function PriceChart({ title, points, forecast = false }) {
           <line x1={x(points[i-1].time)} y1={y(prices[i-1])} x2={x(p.time)} y2={y(prices[i])}
             stroke="#087e74" strokeWidth="2" strokeDasharray={forecast ? "5 4" : undefined}/>}
         <circle cx={x(p.time)} cy={y(prices[i])} r={forecast ? 4 : 2.8} fill="#087e74">
-          <title>{p.label} · {p.price.toLocaleString("ko-KR", {maximumFractionDigits: 0})}만 원</title>
+          <title>{p.label} · {rate ? p.rate.toFixed(2) + "%" : p.price.toLocaleString("ko-KR") + "만 원"}</title>
         </circle>
         {(forecast || i === 0 || i === points.length - 1) &&
           <text x={x(p.time)} y="168" textAnchor="middle">{p.label}</text>}
@@ -40,7 +40,7 @@ export function ForecastChart({ data }) {
 function monthlyPrices(rows) {
   const buckets = new Map();
   for (const row of rows) {
-    if (row.is_cancelled) continue;
+    if (row.is_cancelled || !(Number(row.price_manwon) > 0)) continue;
     const month = row.contract_date.slice(0, 7);
     if (!buckets.has(month)) buckets.set(month, []);
     buckets.get(month).push(Number(row.price_manwon));
@@ -50,13 +50,18 @@ function monthlyPrices(rows) {
     const middle = Math.floor(values.length / 2);
     const price = values.length % 2 ? values[middle] : (values[middle-1] + values[middle]) / 2;
     const [year, month] = label.split("-").map(Number);
-    return {time: year * 12 + month, price, label};
+    return {time: year * 12 + month, price, label, count: values.length};
   });
 }
 
 export const TradeChart = React.memo(function TradeChart({ rows }) {
   const points = useMemo(() => monthlyPrices(rows), [rows]);
-  return <PriceChart title="월별 실거래가 중앙값" points={points}/>;
+  const changes = useMemo(() => points.map(p => ({...p, rate: (p.price / points[0].price - 1) * 100})), [points]);
+  const first = points[0], last = points[points.length - 1];
+  return <><PriceChart title="월별 실거래가 중앙값" points={points}/>
+    {points.length >= 2 ? <><PriceChart title="조회 기간 첫 거래월 대비 누적 가격 변동률" points={changes} rate/>
+      <p>{first.label} ({first.count}건) → {last.label} ({last.count}건) · {changes.at(-1).rate.toFixed(2)}%
+        · 같은 면적군의 월별 중앙값 기준</p></> : <p>가격 변동률은 유효 거래가 있는 달이 2개 이상일 때 표시합니다.</p>}</>;
 });
 
 const colors = ["#087e74", "#994b19", "#5952a4", "#9c3457"];
