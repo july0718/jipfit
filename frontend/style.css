@@ -71,3 +71,8 @@ thead th { color:#51645e; font-size:14px; }
 .compare-dialog td, .compare-dialog thead th { min-width: 8rem; }
 .comparison-legend { display: flex; flex-wrap: wrap; gap: .4rem 1rem; padding: 0; list-style: none; }
 .comparison-legend span { display: inline-block; width: .75rem; height: .75rem; margin-right: .4rem; border-radius: 50%; }
+
+.range-filters { border: 1px solid #c6d4cf; border-radius: .5rem; margin: .8rem 0; min-width: 0; }
+.range-filters div { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .35rem; margin-bottom: .65rem; }
+.range-filters span, .range-filters small { grid-column: 1 / -1; }
+.range-filters input { box-sizing: border-box; width: 100%; min-width: 0; }

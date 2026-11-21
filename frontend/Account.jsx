@@ -112,7 +112,13 @@ function Account({home, homes, resolveHome, onSelect, compared, horizon, onOpenC
       {profile.favorites.length === 0 ? <p>단지와 면적군을 선택해 관심 목록에 저장하세요.</p>
         : <ul>{profile.favorites.map(f => {
           return <li key={JSON.stringify([f.complex_id,f.area_group])}><button disabled={busy}
-            onClick={() => openSaved([[f.complex_id, f.area_group]], ([item]) => onSelect(item))}>{f.name} · {f.area_group}㎡</button> <small>{f.address}</small></li>;
+            onClick={() => openSaved([[f.complex_id, f.area_group]], ([item]) => onSelect(item))}>{f.name} · {f.area_group}㎡</button> <small>{f.address}</small>
+            <button disabled={busy || (compared.length >= 4 && !compared.some(c => c.complex_id === f.complex_id))}
+              onClick={() => openSaved([[f.complex_id, f.area_group]], ([item]) => {
+                const included = compared.some(c => c.complex_id === item.complex_id);
+                onOpenComparison(included ? compared.map(c => c.complex_id === item.complex_id ? item : c) : [...compared, item], horizon);
+              })}>비교에 담기</button>
+            <button disabled={busy} onClick={() => submit("/favorite", {complex_id:f.complex_id, area_group:f.area_group, save:false})}>관심 해제</button></li>;
         })}</ul>}
       <h3>단지 메모</h3>
       {home && <NoteEditor key={JSON.stringify([profile.username,home.complex_id,note])} initial={note} busy={busy}
