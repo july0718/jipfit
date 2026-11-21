@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "./_worker.js";
-import { clusterMarkers, districtNames } from "./mapData.js";
+import { clusterMarkers, districtNames, districtCenter } from "./mapData.js";
 
 const districts = [
   {code: "11215", name: "광진구", bounds: [37.52, 127.06, 37.58, 127.12]},
@@ -95,4 +95,20 @@ test("viewport and zoom cluster behavior stay the same", () => {
   assert.deepEqual(clusterMarkers(points, 11, "0").map(p => p.count || 1), [1, 2]);
   assert.deepEqual(clusterMarkers(points, 15), points);
   assert.deepEqual(districtNames(districts, [37.52, 127.06, 37.56, 127.09]), ["광진구"]);
+});
+
+test("district navigation never falls back to City Hall while another ward is loading", () => {
+  const gwangjin = {complex_id: "서울특별시 광진구 화양동|1|단지", latitude: 37.55, longitude: 127.07};
+  const gangnam = {complex_id: "서울특별시 강남구 역삼동|1|단지", latitude: 37.50, longitude: 127.04};
+  const bounds = [37.46, 127.02, 37.54, 127.12];
+
+  // The old ward's homes can remain on screen while readHomes resolves.
+  assert.equal(districtCenter("강남구", [gwangjin], null), null);
+  const fallback = districtCenter("강남구", [gwangjin], bounds);
+  assert.ok(Math.abs(fallback[0] - 37.5) < 1e-9);
+  assert.ok(Math.abs(fallback[1] - 127.07) < 1e-9);
+  assert.deepEqual(districtCenter("강남구", [gwangjin, gangnam], bounds), [gangnam.latitude, gangnam.longitude]);
+
+  // The whole-Seoul view alone is allowed to use the City Hall center.
+  assert.deepEqual(districtCenter("", [], null), [37.5665, 126.978]);
 });
