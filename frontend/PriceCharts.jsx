@@ -28,7 +28,7 @@ function PriceChart({ title, points, forecast = false, rate = false, band = [] }
         <text x="48" y={y(v)+4} textAnchor="end">{v.toFixed(2)}</text>
       </g>)}
       {polygon && <polygon points={polygon} fill="#a6c8dc" fillOpacity="0.5">
-        <title>광진구 과거 모델 잔차의 10~90백분위 참고범위. 서울 통합 모델의 예측 신뢰구간 아님.</title>
+        <title>2025년 서울 통합 HGB 모델의 과거 홀드아웃 오차 10~90백분위 참고범위. 현재 운영 모델의 신뢰구간 아님.</title>
       </polygon>}
       {points.map((p, i) => <g key={p.time}>
         {i > 0 && (forecast || p.time - points[i-1].time <= 3) &&
@@ -47,15 +47,15 @@ export function ForecastChart({ data }) {
   const [showReference, setShowReference] = React.useState(false);
   const [staticReference, setStaticReference] = React.useState(null);
   React.useEffect(() => {
-    if (data?.historical_reference) return;
+    // The API may still return an older Gwangjin reference. Never use it.
     let active = true;
     readStaticReference().then(reference => { if (active) setStaticReference(reference); });
     return () => { active = false; };
-  }, [data?.historical_reference]);
+  }, []);
   const points = [{time: 0, price: Number(data.reference_price_manwon), label: "기준가"},
     ...data.forecasts.map(f => ({time: f.months, price: Number(f.price_manwon), label: f.months + "개월"}))];
   const reference = referenceBandPoints({
-    ...data, historical_reference: data.historical_reference || staticReference
+    ...data, historical_reference: staticReference
   });
   const available = reference.length === data.forecasts.length;
   return <section className="forecast-reference">
@@ -64,20 +64,21 @@ export function ForecastChart({ data }) {
     <label><input type="checkbox" checked={showReference && available}
       disabled={!available}
       onChange={e => setShowReference(e.target.checked)}/>
-      광진구 과거 검증 오차 참고범위 표시</label>
+      서울 통합 HGB 과거 검증 오차 참고범위 표시</label>
     {available ? <>
       {showReference && <table>
-        <caption>광진구 과거 모델 오차 분포 · 실제 상승률 − 예측 상승률 · 단위 %p</caption>
+        <caption>서울 통합 HGB 홀드아웃 오차(2025년 4~9월) · 실제 상승률 − 예측 상승률 · 단위 %p</caption>
         <thead><tr><th>기간</th><th>표본</th><th>10백분위</th><th>90백분위</th></tr></thead>
         <tbody>{reference.map(row => <tr key={row.time}>
           <th>{row.time}개월</th><td>{row.sample_count.toLocaleString("ko-KR")}건</td>
           <td>{row.p10_pp.toFixed(2)}%p</td><td>{row.p90_pp.toFixed(2)}%p</td>
         </tr>)}</tbody>
       </table>}
-      <p role="note">참고용: 음영은 광진구 과거 모델 평가의 오차 분포를 현재 예측에 단순 적용한 값입니다.
-        현재 서울 통합 HGB 모델의 검증된 신뢰구간이나 개별 단지 미래 가격의 확률 범위가 아닙니다.</p>
-    </> : <p role="status">과거 검증 오차 참고자료를 아직 불러오지 못했습니다.
-      정적 자료 배포 또는 네트워크 연결을 확인해 주세요. 예측 가격선은 정상 표시됩니다.</p>}
+      <p role="note">참고용: 서울 통합 HGB의 2025년 4월 학습 모델을 2025년 4~9월 기준월에서 평가한
+        과거 홀드아웃 오차를 현재 예측에 단순 적용한 값입니다. 현재 배포된 모델의
+        검증된 신뢰구간이나 개별 단지 미래 가격의 확률 범위가 아닙니다.</p>
+    </> : <p role="status">서울 통합 HGB 홀드아웃 오차 분포가 아직 검증·배포되지 않았습니다.
+      광진구 오차를 대신 사용하지 않습니다. 예측 가격선과 실거래 차트는 정상 표시됩니다.</p>}
   </section>;
 }
 

@@ -58,8 +58,14 @@ jobs:
           npm run build
           cp index.html style.css config.js _worker.js dist/
 
-      - name: 검증된 광진구 오차 참고범위 JSON 내보내기
-        run: python tools/export_historical_reference.py frontend/dist/metadata/forecast-reference.json
+      - name: 서울 통합 HGB 홀드아웃 JSON 검증 및 배포
+        run: |
+          if [ -f frontend/public/metadata/seoul-forecast-reference.json ]; then
+            python backend/seoul_reference.py frontend/public/metadata/seoul-forecast-reference.json
+            cp frontend/public/metadata/seoul-forecast-reference.json frontend/dist/metadata/
+          else
+            echo "Seoul HGB holdout results not yet published. No reference range will be shown."
+          fi
 
       - name: 기존 Cloudflare Pages 프로젝트에 배포
         working-directory: ${{ runner.temp }}

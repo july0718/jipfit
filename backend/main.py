@@ -12,7 +12,6 @@ from districts import DISTRICTS
 
 from math import expm1
 from inference import HORIZONS, forecast, load_model, predict_growth
-from reference_band import historical_reference
 
 
 @asynccontextmanager
@@ -161,7 +160,6 @@ def predict(complex_id: str = Query(min_length=1), area_group: int = Query(gt=0)
     if row is None:
         raise HTTPException(404, "선택한 단지와 면적군의 모델 입력이 없습니다.")
     result = forecast(app.state.model, row)
-    result["historical_reference"] = historical_reference()
     result["pilot"] = complex_id.split(" ")[1] != "광진구"
     result["calculated_at"] = datetime.now(timezone.utc)
     return result

@@ -1,6 +1,7 @@
 
 """Evaluate the April 2025 Seoul HGB model without changing production data."""
 import argparse
+from hashlib import file_digest
 import tempfile
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from evaluate_districts import audit_panel, train
 from joint_model import HORIZONS
 from macro_features import load_monthly_macro
 from train_seoul import TRADE_START, read_trades
+from seoul_reference import build_reference, write_reference
 
 ROOT = Path(__file__).resolve().parent
 CUTOFF = pd.Period("2025-04", freq="M")
@@ -67,6 +69,7 @@ def main():
     )
 
     records = []
+    individual_seoul = []
 
     with tempfile.TemporaryDirectory() as directory:
         temp = Path(directory)
@@ -171,6 +174,24 @@ def main():
                             )
 
                             error = predicted - actual
+                            if name == "seoul":
+                                # Keep one row per scored complex/area/month/horizon.
+                                # This report stays local; only aggregate quantiles are public.
+                                scoped = test.loc[observed, ["complex_id", "area_group"]]
+                                for (cid, area), actual_value, predicted_value in zip(
+                                    scoped.itertuples(index=False, name=None), actual, predicted, strict=True
+                                ):
+                                    individual_seoul.append({
+                                        "district": code,
+                                        "month": str(month),
+                                        "horizon": int(h),
+                                        "model": "seoul",
+                                        "complex_id": str(cid),
+                                        "area_group": int(area),
+                                        "predicted_return_percent": float(predicted_value),
+                                        "actual_return_percent": float(actual_value),
+                                        "residual_pp": float(actual_value - predicted_value),
+                                    })
 
                             records.append({
                                 "district": code,
@@ -210,6 +231,20 @@ def main():
         detail, ["month", "horizon", "model"]
     )
 
+    # Validate before writing; no fabricated quantiles from summary MAE/bias.
+    with args.model.open("rb") as model_file:
+        model_sha = file_digest(model_file, "sha256").hexdigest()
+    reference = build_reference(individual_seoul, model_sha)
+
+    # Independently cross-check individual residuals against the legacy summary.
+    seoul_summary = summary.loc[summary.model == "seoul"].set_index("horizon")
+    for item in reference["horizons"]:
+        reported = seoul_summary.loc[item["months"]]
+        if (item["sample_count"] != int(reported.scored)
+                or abs(item["mae_pp"] - float(reported.mae_pp)) > 1e-8
+                or abs(item["bias_pp"] - float(reported.bias_pp)) > 1e-8):
+            raise ValueError("Individual Seoul residuals disagree with the aggregate holdout summary")
+
     prefix = args.output_prefix
     prefix.parent.mkdir(parents=True, exist_ok=True)
 
@@ -229,10 +264,18 @@ def main():
         prefix.parent / f"{prefix.name}-detail.csv",
         index=False,
     )
+    pd.DataFrame(individual_seoul).to_csv(
+        prefix.parent / f"{prefix.name}-seoul-residuals.csv",
+        index=False,
+    )
+    write_reference(
+        reference, prefix.parent / f"{prefix.name}-seoul-reference.json"
+    )
 
     print("\n=== SEOUL HOLDOUT SUMMARY ===")
     print(summary.round(3).to_string(index=False))
-    print("\nSaved four CSV reports.", flush=True)
+    print("\nSaved four CSV reports, local individual Seoul residuals, "
+          "and public-safe aggregated reference JSON.", flush=True)
 
 
 if __name__ == "__main__":
