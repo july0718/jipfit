@@ -1,0 +1,44 @@
+name: Forecast chart checks
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "backend/main.py"
+      - "backend/reference_band.py"
+      - "backend/test_reference_band.py"
+      - "backend/Dockerfile"
+      - ".github/workflows/feature19-checks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Node tests
+        working-directory: frontend
+        run: node --test forecastReference.test.mjs
+      - name: React build
+        working-directory: frontend
+        run: |
+          npm install --include=dev --no-audit --no-fund
+          npm run build
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: python -m pip install numpy pandas joblib
+      - name: Historical quantile tests
+        working-directory: backend
+        run: python -m unittest test_reference_band -v
