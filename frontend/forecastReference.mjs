@@ -14,9 +14,10 @@ export function referenceBandPoints(data) {
     const observed = referenceByHorizon.get(h);
     const rate = Number(forecast.return_percent);
     const lo = Number(observed?.p10_pp), hi = Number(observed?.p90_pp);
-    if (!observed || observed.sample_count < 30 ||
-        !Number.isFinite(rate) || !Number.isFinite(lo) ||
-        !Number.isFinite(hi) || lo > hi) return null;
+    if (!observed || !Number.isInteger(observed.sample_count) ||
+        observed.sample_count < 30 || observed.p10_pp == null ||
+        observed.p90_pp == null || !Number.isFinite(rate) ||
+        !Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) return null;
     return {
       time: h,
       lower: Math.max(0, baseline * (1 + (rate + lo) / 100)),
