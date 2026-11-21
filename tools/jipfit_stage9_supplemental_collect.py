@@ -285,7 +285,7 @@ def read_targets(path: Path, scope: str = "p1") -> tuple[list[Parcel], list[dict
         if scope == "p1" and row.get("우선순위") != "P1":
             continue
         filename = (row.get("원본JSON파일명") or "").strip()
-        match = re.fullmatch(r"(\\d{5})_(\\d{5})_([012])_(\\d{4})_(\\d{4})\\.json", filename)
+        match = re.fullmatch(r"(\d{5})_(\d{5})_([012])_(\d{4})_(\d{4})\.json", filename)
         if not match:
             invalid.append({"line": lineno, "address": filename, "reason": "Bad parcel filename"})
             continue
@@ -476,10 +476,11 @@ def run(args) -> int:
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="Audit Stage 9 recap and attached-parcel records, P1 first, safely resumable")
-    p.add_argument("--targets", required=True, help="Existing jipfit_full_targets.csv")
-    p.add_argument("--results", required=True, help="Existing jipfit_buildinghub_results directory")
+    p.add_argument("--targets", required=True, help="Stage 9 200-target audit CSV")
+    p.add_argument("--results", required=True, help="Separate stage9 supplemental results directory (do NOT use original JSON directory)")
     p.add_argument("--dry-run", action="store_true", help="Only count valid, existing and missing targets; never call API")
-    p.add_argument("--expected-total", type=int, default=0, help="Expected selected UNIQUE parcel count; 0 disables guard")\n    p.add_argument("--scope", choices=["p1", "all"], default="p1", help="P1 16 parcels or all 200 parcels")
+    p.add_argument("--expected-total", type=int, default=0, help="Expected selected UNIQUE parcel count; 0 disables guard")
+    p.add_argument("--scope", choices=["p1", "all"], default="p1", help="P1 16 parcels or all 200 parcels")
     p.add_argument("--max-records", type=int, default=0, help="New parcels per run; 0 = all remaining")
     p.add_argument("--daily-request-cap", type=int, default=0, help="Local conservative cap for total API calls per KST day across runs")
     p.add_argument("--confirm-unlimited-daily-cap", action="store_true", help="Explicitly permit run without a known local daily cap; remote 22/23 still stops")
