@@ -58,6 +58,9 @@ jobs:
           npm run build
           cp index.html style.css config.js _worker.js dist/
 
+      - name: 검증된 광진구 오차 참고범위 JSON 내보내기
+        run: python tools/export_historical_reference.py frontend/dist/metadata/forecast-reference.json
+
       - name: 기존 Cloudflare Pages 프로젝트에 배포
         working-directory: ${{ runner.temp }}
         env:
