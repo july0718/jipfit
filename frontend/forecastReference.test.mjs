@@ -34,6 +34,11 @@ test("missing or unspecified audit never invents a confidence interval", () => {
   sample.historical_reference.calibrated_for_current_model = true;
   assert.deepEqual(referenceBandPoints(sample), []);
 });
+test("null percentile cannot silently become zero", () => {
+  const sample = fixture();
+  sample.historical_reference.horizons[0].p10_pp = null;
+  assert.deepEqual(referenceBandPoints(sample).map(x=>x.time), [6,12]);
+});
 test("rejects invalid sample sizes and reversed percentiles", () => {
   const sample = fixture();
   sample.historical_reference.horizons[0].sample_count = 4;
