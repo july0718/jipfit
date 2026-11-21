@@ -98,6 +98,12 @@ class AuditTests(unittest.TestCase):
             self.assertIn('QuotaStop', summary['stop_reason'])
             self.assertFalse((out / '.state' / 'audit.lock').exists())
 
+    def test_previous_result_failure_flag_is_not_skipped(self):
+        with tempfile.TemporaryDirectory() as root:
+            p = Path(root) / 'failed.json'
+            p.write_text('{"success": false}')
+            self.assertFalse(hub.completed_result(p))
+
     def test_locally_enforced_daily_limit(self):
         with tempfile.TemporaryDirectory() as root:
             b = hub.Budget(Path(root) / 'request-budget.json', 1)
