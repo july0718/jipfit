@@ -4,9 +4,13 @@ from pathlib import Path
 import joblib
 import pandas as pd
 
+from districts import DISTRICTS
+
 
 def load_model():
     artifact = joblib.load(Path(__file__).with_name("joint_model.joblib"))
+    if set(artifact.get("scope", ())) != set(DISTRICTS):
+        raise ValueError("The production HGB artifact must cover all 25 Seoul districts")
     return artifact["model"]
 
 

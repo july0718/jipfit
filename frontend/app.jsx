@@ -60,7 +60,7 @@ function Results({ home, data }) {
       <tr key={f.months}><th scope="row">{f.months}개월 후</th><td>{money(f.price_manwon)}</td>
         <td className={f.return_percent >= 0 ? "positive" : "negative"}>{percent.format(f.return_percent)}%</td></tr>
     )}</tbody></table>
-    {data.pilot && <p>{home.address.split(' ')[1]} 시범 전망 · 광진구 학습 모델 적용</p>}
+    <p>서울 통합 HGB 모델</p>
     <ForecastChart data={data}/>
     {data.calculated_at && <p>예측 계산 {seoulTime(data.calculated_at)} (한국시간)</p>}
   </>;
