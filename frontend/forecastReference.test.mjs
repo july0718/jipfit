@@ -45,3 +45,18 @@ test("rejects invalid sample sizes and reversed percentiles", () => {
   sample.historical_reference.horizons[1].p10_pp = 100;
   assert.deepEqual(referenceBandPoints(sample).map(x=>x.time), [12]);
 });
+
+test("loads static JSON when the live API has no historical reference", async t => {
+  const document = fixture().historical_reference;
+  t.mock.method(globalThis, "fetch", async (url, opts) => {
+    assert.equal(url, "/metadata/forecast-reference.json");
+    assert.equal(opts.cache, "no-store");
+    return Response.json(document);
+  });
+  const mod = await import("./forecastReference.mjs?static-download-test");
+  const fetched = await mod.readStaticReference();
+  assert.equal(fetched.kind, "gwangjin_historical_model");
+  assert.equal(mod.referenceBandPoints({...fixture(), historical_reference: fetched}).length, 3);
+  await mod.readStaticReference();
+  assert.equal(globalThis.fetch.mock.callCount(), 1);
+});
