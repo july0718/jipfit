@@ -27,3 +27,37 @@ export function clusterMarkers(items, zoom, selectedId) {
     longitude: group.reduce((sum, item) => sum + Number(item.longitude), 0) / group.length
   }));
 }
+
+
+/**
+ * Resolve the selected ward's map center without mistaking stale homes from the
+ * previously selected ward for an empty result. A null center means "wait for
+ * district metadata or homes", never "navigate to Seoul City Hall".
+ */
+export function districtCenter(district, complexes, bounds) {
+  if (!district) return [37.5665, 126.978];
+  const points = (complexes || []).filter(c => {
+    const ward = c.complex_id?.trim().split(/\s+/)[1] || c.address?.trim().split(/\s+/)[1];
+    const lat = Number(c.latitude), lng = Number(c.longitude);
+    return ward === district && c.latitude != null && c.longitude != null &&
+      Number.isFinite(lat) && Number.isFinite(lng) &&
+      lat >= 37 && lat <= 38 && lng >= 126 && lng <= 128;
+  });
+  if (points.length) {
+    return [
+      points.reduce((sum, c) => sum + Number(c.latitude), 0) / points.length,
+      points.reduce((sum, c) => sum + Number(c.longitude), 0) / points.length
+    ];
+  }
+  // The district catalog is available before its on-demand apartment data.
+  // Use its geographic bounds while the next district's homes are loading.
+  if (Array.isArray(bounds) && bounds.length === 4) {
+    const [south, west, north, east] = bounds.map(Number);
+    if ([south, west, north, east].every(Number.isFinite) &&
+        south <= north && west <= east &&
+        south >= 37 && north <= 38 && west >= 126 && east <= 128) {
+      return [(south + north) / 2, (west + east) / 2];
+    }
+  }
+  return null;
+}
