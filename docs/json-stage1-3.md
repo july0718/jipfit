@@ -64,7 +64,7 @@ docker compose exec api python verify_service.py http://web
 ```
 
 Cloudflare Pages의 정적 배포에도 `data/` 폴더를 포함하는 별도 배포 작업이 필요합니다.
-기존 `export-pages.ps1`은 네 가지 화면 파일만 복사하므로 이 브랜치에서 Pages 배포가 자동 완성된 상태는 아닙니다.
+이 브랜치의 `export-pages.ps1`은 `frontend/public/data/manifest.json`이 있으면 생성된 JSON 폴더도 `pages-upload/data/`에 복사합니다. 다만 실제 Cloudflare 업로드/배포 자동화는 아직 수행하지 않았습니다.
 
 ## 남은 검증 항목
 
