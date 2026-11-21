@@ -15,6 +15,7 @@ import psycopg
 from districts import DISTRICTS, GWANGJIN
 from features import build_inputs
 from molit import fetch_month
+from refresh_metadata import apply_metadata
 
 ROOT = Path(__file__).resolve().parent
 KST = timezone(timedelta(hours=9))
@@ -145,10 +146,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--district", choices=DISTRICTS)
+    parser.add_argument("--metadata-dir", type=Path)
     args = parser.parse_args()
     districts = [args.district] if args.district else list(DISTRICTS)
     while True:
         failed = refresh_many(districts)
+        if args.metadata_dir and not failed:
+            try:
+                apply_metadata(args.metadata_dir, datetime.now(KST).date())
+            except Exception as exc:
+                failed.append("verified metadata")
+                print(f"Metadata update failed ({type(exc).__name__}); check the verified input.", flush=True)
         if args.once:
             if failed:
                 raise SystemExit("Failed districts: " + ", ".join(failed))
