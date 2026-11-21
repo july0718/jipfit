@@ -5,7 +5,7 @@ RUN npm install --no-audit --no-fund
 COPY facilities ./facilities
 COPY public/metadata ./public/metadata
 COPY build-facilities.mjs housingAnalysis.mjs Coordinates.jsx geocode-utils.cjs app.jsx staticData.js mapData.js DistrictMap.jsx Account.jsx PriceCharts.jsx forecastReference.mjs map-unverified-complexes.json ./
-RUN npm run build
+RUN npm run build && if [ -f public/metadata/seoul-forecast-reference.json ]; then cp public/metadata/seoul-forecast-reference.json dist/metadata/; fi
 
 FROM nginx:stable-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
