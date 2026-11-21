@@ -63,3 +63,17 @@ python -m unittest test_reference_band -v
 ## 후속 과제
 
 정식 서울 통합 모델의 예측 구간을 주장하려면 **동일한 모델 계열·학습 시점·평가 대상에 대해 시간 누수 없는 서울 25개 구 외표본 잔차 자료**를 수집하고, 기간·지역별 표본 수와 포함률을 독립 검증해야 한다. 그런 자료가 준비되기 전까지 현재 밴드는 ‘광진구 과거 참고범위’만 뜻한다.
+
+## Cloudflare 정적 JSON 제공(가시성 버그 수정)
+
+이전 구현은 API 서버가 최신 `historical_reference` 필드를 반환하지 않으면 차트 아래의 체크박스조차 나타나지 않았다. 사용자에게 기능이 보이지 않는 문제가 있었으므로, `main` 푸시 배포 단계에서 `backend/audit.csv.gz`를 직접 검증하고 다음 정적 파일을 만든다.
+
+```text
+/metadata/forecast-reference.json
+```
+
+`tools/export_historical_reference.py`는 기존 과거 감사 자료를 읽기 전용으로 처리하여 10·90백분위 오차를 계산한다. React는 라이브 API 응답에 해당 자료가 없을 경우 이 정적 JSON을 한 번만 불러온다. 이를 통해 API 컨테이너를 당장 재배포하지 않아도 공개 Cloudflare Pages에서 **참고 음영**을 표시할 수 있다. 백엔드/DB/학습 모델을 수정하지 않는다.
+
+체크박스 자체는 항상 표시하며, 데이터가 없으면 비활성화 상태와 원인을 표시한다.
+
+배포 검증: `https://jipfit-48v.pages.dev/metadata/forecast-reference.json`에서 `kind=gwangjin_historical_model`과 `calibrated_for_current_model=false` 확인. 프론트엔드의 ‘예측 매매가’ 그래프에서 체크박스를 켜고 참고 음영을 확인한다. 이 정적 데이터 역시 **현재 서울 통합 HGB의 검증된 예측 신뢰구간이 아니다.**
