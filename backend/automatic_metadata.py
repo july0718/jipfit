@@ -144,40 +144,47 @@ def kapt_updates(existing, source):
                 yield cid, address, old_name, code, {"name": name}
 
 
+def refresh_kapt_district(month, key, district):
+    district_name = DISTRICTS[district]
+    batch = f"kapt-{month}-{district}"
+    with psycopg.connect(connect_timeout=8) as db:
+        if db.execute("SELECT 1 FROM complex_metadata_runs WHERE batch=%s", (batch,)).fetchone():
+            return
+        existing = db.execute("""
+            SELECT complex_id,name,address,built FROM complexes
+            WHERE split_part(complex_id,' ',2)=%s
+        """, (district_name,)).fetchall()
+    source = []
+    for code in kapt_codes(district, key):
+        item = kapt_body("AptBasisInfoServiceV5/getAphusBassInfoV5", key, kaptCode=code)["item"]
+        if item.get("kaptCode") != code:
+            raise ValueError("K-apt detail code mismatch")
+        source.append((code, item))
+    updates = list(kapt_updates(existing, source))
+    with psycopg.connect(connect_timeout=8) as db:
+        started = db.execute("""
+            INSERT INTO complex_metadata_runs(batch,checksum) VALUES (%s,%s)
+            ON CONFLICT DO NOTHING RETURNING batch
+        """, (batch, "automatic:kapt")).fetchone()
+        if not started:
+            return
+        applied = 0
+        for cid, address, old_name, code, changes in updates:
+            if not update_complex(db, cid, address, changes, expected_name=old_name):
+                continue
+            db.execute("INSERT INTO complex_metadata_evidence VALUES (%s,%s,%s,%s)",
+                       (batch, cid, "K-apt: " + code, Jsonb(changes)))
+            applied += 1
+    print(f"K-apt {district} {month}: matched changes={applied}", flush=True)
+
+
 def refresh_kapt(today, key, districts):
     month = today.strftime("%Y-%m")
     for district in districts:
-        district_name = DISTRICTS[district]
-        batch = f"kapt-{month}-{district}"
-        with psycopg.connect(connect_timeout=8) as db:
-            if db.execute("SELECT 1 FROM complex_metadata_runs WHERE batch=%s", (batch,)).fetchone():
-                continue
-            existing = db.execute("""
-                SELECT complex_id,name,address,built FROM complexes
-                WHERE split_part(complex_id,' ',2)=%s
-            """, (district_name,)).fetchall()
-        source = []
-        for code in kapt_codes(district, key):
-            item = kapt_body("AptBasisInfoServiceV5/getAphusBassInfoV5", key, kaptCode=code)["item"]
-            if item.get("kaptCode") != code:
-                raise ValueError("K-apt detail code mismatch")
-            source.append((code, item))
-        updates = list(kapt_updates(existing, source))
-        with psycopg.connect(connect_timeout=8) as db:
-            started = db.execute("""
-                INSERT INTO complex_metadata_runs(batch,checksum) VALUES (%s,%s)
-                ON CONFLICT DO NOTHING RETURNING batch
-            """, (batch, "automatic:kapt")).fetchone()
-            if not started:
-                continue
-            applied = 0
-            for cid, address, old_name, code, changes in updates:
-                if not update_complex(db, cid, address, changes, expected_name=old_name):
-                    continue
-                db.execute("INSERT INTO complex_metadata_evidence VALUES (%s,%s,%s,%s)",
-                           (batch, cid, "K-apt: " + code, Jsonb(changes)))
-                applied += 1
-        print(f"K-apt {district} {month}: matched changes={applied}", flush=True)
+        try:
+            refresh_kapt_district(month, key, district)
+        except (OSError, ValueError, KeyError, TypeError, psycopg.Error) as error:
+            print(f"K-apt {district} {month}: deferred ({type(error).__name__})", flush=True)
 
 
 def refresh_automatic_metadata(today, districts):
