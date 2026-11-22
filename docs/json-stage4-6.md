@@ -27,7 +27,7 @@ docker compose logs -f updater
 
 스케줄러는 시작 시와 이후 매일 한국시간 06시에 거래·모델 입력을 갱신합니다. 갱신 실패 시 한 시간 후 다시 시도합니다. 정정 전 원본 행은 `trade_revisions`에 보관하고, 현재 거래 응답에도 취소 상태를 포함합니다.
 
-단지 정보와 좌표는 근거가 확인된 변경 목록으로 반영합니다. 입력 파일을 `verified-metadata/YYYY-MM.json`에 두고, 신규 단지용 변경 파일은 `new-<고유 배치명>.json`으로 둡니다. 항목마다 `complex_id`, `expected_address`, `evidence`, `changes`가 필요합니다. 주소가 일치하는 경우에만 반영합니다. 지도는 존치 상태와 관계없이 좌표와 유효한 실거래 표시가격이 있는 단지를 표시합니다.
+단지 정보와 좌표는 근거가 확인된 변경 목록으로 반영합니다. 입력 파일을 `verified-metadata/YYYY-MM.json`에 두고, 신규 단지용 변경 파일은 `new-<고유 배치명>.json`으로 둡니다. 항목마다 `complex_id`, `expected_address`, `evidence`, `changes`가 필요합니다. 주소가 일치하는 경우에만 반영합니다. 지도는 좌표와 유효한 실거래 표시가격이 있는 단지를 표시합니다.
 
 ## 확인할 항목
 

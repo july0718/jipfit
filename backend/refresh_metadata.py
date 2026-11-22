@@ -5,8 +5,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-COLUMNS = {"name", "address", "built", "latitude", "longitude", "existence_status"}
-STATUSES = {"active", "demolished", "unconfirmed"}
+COLUMNS = {"name", "address", "built", "latitude", "longitude"}
 
 
 def validate(document, batch, year):
@@ -27,8 +26,6 @@ def validate(document, batch, year):
             raise ValueError("A complex ID cannot change district")
         if "built" in changes and (type(changes["built"]) is not int or not 1900 <= changes["built"] <= year + 2):
             raise ValueError("Invalid construction year")
-        if "existence_status" in changes and changes["existence_status"] not in STATUSES:
-            raise ValueError("Invalid existence status")
         if {"latitude", "longitude"} & changes.keys():
             lat, lng = changes.get("latitude"), changes.get("longitude")
             if not (type(lat) in (int, float) and type(lng) in (int, float) and 33 <= lat <= 39 and 124 <= lng <= 132):

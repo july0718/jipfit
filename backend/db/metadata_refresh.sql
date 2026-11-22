@@ -1,6 +1,3 @@
-ALTER TABLE complexes ADD COLUMN IF NOT EXISTS existence_status text;
-ALTER TABLE complexes ALTER COLUMN existence_status SET DEFAULT 'unconfirmed';
-
 CREATE TABLE IF NOT EXISTS complex_metadata_runs (
     batch text PRIMARY KEY,
     checksum text NOT NULL,

@@ -64,7 +64,7 @@ def list_districts():
 def list_complexes(include_sort: bool = False, district: str | None = None, live_only: bool = False):
     if district is not None and district not in DISTRICTS.values():
         raise HTTPException(422, "지원하지 않는 자치구입니다.")
-    metadata = "" if live_only else "c.name, c.address, c.built, c.latitude, c.longitude, c.existence_status,"
+    metadata = "" if live_only else "c.name, c.address, c.built, c.latitude, c.longitude,"
     scope = (district, district)
     with connect() as db:
         rows = db.execute(f"""

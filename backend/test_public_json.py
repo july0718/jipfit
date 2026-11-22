@@ -126,7 +126,7 @@ class SnapshotTest(unittest.TestCase):
         batch = "2026-11"
         row = {"complex_id": "서울 광진구 샘플", "expected_address": "서울 광진구 샘플",
                "evidence": "verified-source-record", "changes": {
-                   "latitude": 37.5, "longitude": 127.1, "existence_status": "active"}}
+                   "latitude": 37.5, "longitude": 127.1}}
         doc = {"batch": batch, "complexes": [row]}
         validate(doc, batch, 2026)
         del row["changes"]["longitude"]
