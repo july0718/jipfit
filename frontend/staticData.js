@@ -57,7 +57,7 @@ async function hybridDistrict(name, code) {
   // New complexes can be traded before the next monthly metadata export.
   const missing = rows.some(row => !byId.has(row.complex_id) && !row.address);
   const source = missing ? await full() : rows;
-  return source.map(row => ({...row, ...byId.get(row.complex_id)}));
+  return source.map(row => ({...byId.get(row.complex_id), ...row}));
 }
 
 function districtHomes(name, code) {

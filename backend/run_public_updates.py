@@ -7,6 +7,7 @@ from time import sleep
 
 import psycopg
 
+from automatic_metadata import refresh_automatic_metadata
 from districts import DISTRICTS
 from publish_snapshots import R2, publish, rollback
 from refresh import KST, refresh_many, seconds_until_refresh
@@ -26,7 +27,9 @@ def run(out, inbox, remote):
     failed = refresh_many(DISTRICTS)
     if failed:
         raise RuntimeError("Refresh failed for: " + ", ".join(failed))
-    apply_metadata(inbox, datetime.now(KST).date())
+    today = datetime.now(KST).date()
+    refresh_automatic_metadata(today, DISTRICTS)
+    apply_metadata(inbox, today)
     publish(out, remote)
 
 

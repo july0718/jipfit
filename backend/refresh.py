@@ -12,6 +12,7 @@ import time as clock
 import pandas as pd
 import psycopg
 
+from automatic_metadata import refresh_automatic_metadata
 from districts import DISTRICTS, GWANGJIN
 from features import build_inputs
 from molit import fetch_month
@@ -26,6 +27,28 @@ def reconcile(db, month, complexes, wanted, district, *, history=False):
     first = month.start_time.date()
     end = (month + 1).start_time.date()
     with db.cursor() as cur:
+        cur.execute("""
+            SELECT complex_id, name, address, built FROM complexes
+            WHERE split_part(complex_id,' ',2)=%s
+        """, (DISTRICTS[district],))
+        known_ids = set()
+        current_names = defaultdict(list)
+        for cid, name, address, built in cur:
+            known_ids.add(cid)
+            current_names[name, address, built].append(cid)
+        # The trade key includes the reported name. Reuse an existing ID when a
+        # verified name change now matches the source's name, parcel and year.
+        aliases = {}
+        for cid, name, address, built in complexes.values():
+            matches = current_names[name, address, built]
+            if cid not in known_ids and len(matches) == 1:
+                aliases[cid] = matches[0]
+        if aliases:
+            complexes = {cid: row for cid, row in complexes.items() if cid not in aliases}
+            remapped = Counter()
+            for (cid, *trade), count in wanted.items():
+                remapped[(aliases.get(cid, cid), *trade)] += count
+            wanted = remapped
         cur.executemany("""
             INSERT INTO complexes(complex_id,name,address,built) VALUES (%s,%s,%s,%s)
             ON CONFLICT DO NOTHING
@@ -151,9 +174,12 @@ def main():
     districts = [args.district] if args.district else list(DISTRICTS)
     while True:
         failed = refresh_many(districts)
-        if args.metadata_dir and not failed:
+        if not failed:
             try:
-                apply_metadata(args.metadata_dir, datetime.now(KST).date())
+                today = datetime.now(KST).date()
+                refresh_automatic_metadata(today, districts)
+                if args.metadata_dir:
+                    apply_metadata(args.metadata_dir, today)
             except Exception as exc:
                 failed.append("verified metadata")
                 print(f"Metadata update failed ({type(exc).__name__}); check the verified input.", flush=True)

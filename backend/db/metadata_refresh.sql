@@ -11,3 +11,9 @@ CREATE TABLE IF NOT EXISTS complex_metadata_evidence (
     changes jsonb NOT NULL,
     PRIMARY KEY (batch, complex_id)
 );
+
+CREATE TABLE IF NOT EXISTS complex_geocode_attempts (
+    complex_id text PRIMARY KEY REFERENCES complexes(complex_id) ON DELETE CASCADE,
+    address text NOT NULL,
+    attempted_on date NOT NULL
+);

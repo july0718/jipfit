@@ -32,6 +32,18 @@ def validate(document, batch, year):
                 raise ValueError("Coordinates must be a verified numeric pair")
 
 
+def update_complex(db, cid, address, changes, *, expected_name=None):
+    if not changes or not changes.keys() <= COLUMNS:
+        raise ValueError("Unknown metadata fields")
+    assignments = ", ".join(f"{key}=%s" for key in changes)
+    query = f"UPDATE complexes SET {assignments} WHERE complex_id=%s AND address=%s"
+    values = (*changes.values(), cid, address)
+    if expected_name is not None:
+        query += " AND name=%s"
+        values += (expected_name,)
+    return db.execute(query, values).rowcount == 1
+
+
 def apply_file(path, year):
     import psycopg
     from psycopg.types.json import Jsonb
@@ -52,11 +64,7 @@ def apply_file(path, year):
         db.execute("INSERT INTO complex_metadata_runs(batch,checksum) VALUES (%s,%s)", (batch, checksum))
         for record in document["complexes"]:
             cid, address, evidence, changes = (record[k] for k in ("complex_id", "expected_address", "evidence", "changes"))
-            # Field names have been checked against the fixed allowlist.
-            assignments = ", ".join(f"{key}=%s" for key in changes)
-            updated = db.execute(f"UPDATE complexes SET {assignments} WHERE complex_id=%s AND address=%s",
-                                 (*changes.values(), cid, address))
-            if updated.rowcount != 1:
+            if not update_complex(db, cid, address, changes):
                 raise ValueError(f"Address/complex mismatch in {batch}: {cid}")
             db.execute("INSERT INTO complex_metadata_evidence VALUES (%s,%s,%s,%s)",
                        (batch, cid, evidence, Jsonb(changes)))

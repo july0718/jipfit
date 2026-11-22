@@ -6,7 +6,6 @@ import { districtOf, readDistricts, readHomes, readTrades } from "./staticData";
 import { districtNames } from "./mapData";
 import Account from "./Account";
 import DistrictMap from "./DistrictMap";
-import Coordinates, { cachedPoint } from "./Coordinates";
 
 import { EMPTY_RANGES, matchingComplex, changePercent, pricePerPyeong } from "./housingAnalysis.mjs";
 
@@ -236,7 +235,6 @@ function App() {
   const [viewport, setViewport] = useState(null);
   const [all, setAll] = useState(false);
   const [listPage, setListPage] = useState(0);
-  const onCoordinates = useCallback(() => setCoordinateRevision(n => n + 1), []);
   const onViewport = useCallback(next => {
     if (district) return;
     setViewport(previous => previous && next.every((v, i) => v === previous[i]) ? previous : next);
@@ -244,15 +242,14 @@ function App() {
   const scope = JSON.stringify(district ? [district] : all || query.trim()
     ? districts.map(d => d.name) : districtNames(districts, viewport));
   const [onlyReady, setOnlyReady] = useState(false);
-  const [coordinateRevision, setCoordinateRevision] = useState(0);
   const complexes = useMemo(() => {
     const index = new Map();
     for (const item of homes || []) {
-      if (!index.has(item.complex_id)) index.set(item.complex_id, { ...item, ...(item.latitude == null || item.longitude == null ? cachedPoint(item.address) : {}), groups: [] });
+      if (!index.has(item.complex_id)) index.set(item.complex_id, { ...item, groups: [] });
       index.get(item.complex_id).groups.push(item);
     }
     return Array.from(index.values());
-  }, [homes, coordinateRevision]);
+  }, [homes]);
   const visible = useMemo(() => complexes.filter(c =>
     (!district || c.address.split(" ")[1] === district) &&
     (c.name + " " + c.address).includes(query.trim()) && matchesFacilities(c.facilities,facilityFilters)
@@ -335,7 +332,7 @@ function App() {
       onOpenComparison={openSavedComparison}/><label>지역<select value={district} onChange={e => { setDistrict(e.target.value); setViewport(null); setAll(false); pending.current?.abort(); setHome(null); setData(null); setError(""); }}>
         {Array.from(new Set(["광진구", ...districts.map(item => item.name)])).sort((a,b) => a.localeCompare(b,"ko")).map(name =>
           <option value={name} key={name}>{name}</option>)}<option value="">전체 지역</option>
-      </select></label><Coordinates complexes={complexes} district={district} onChange={onCoordinates}/><DistrictMap district={district} districtBounds={districts.find(item => item.name === district)?.bounds} allComplexes={complexes} complexes={visible} onSelect={selectComplex} selectedId={home?.complex_id} onViewport={onViewport}/>
+      </select></label><DistrictMap district={district} districtBounds={districts.find(item => item.name === district)?.bounds} allComplexes={complexes} complexes={visible} onSelect={selectComplex} selectedId={home?.complex_id} onViewport={onViewport}/>
       <p className="map-key">초록색은 예측 가능한 단지, 회색은 실거래만 있는 단지입니다.</p>
       <div className="layout">
       <section className="panel"><h2>단지·면적 선택</h2>

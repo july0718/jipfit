@@ -4,7 +4,7 @@ from inference import HORIZONS, load_model, predict_growth
 
 
 def load_home_rows(db, *, district=None, include_sort=True, live_only=False, model=None):
-    metadata = "" if live_only else "c.name, c.address, c.built, c.latitude, c.longitude,"
+    metadata = "c.name, c.latitude, c.longitude," if live_only else "c.name, c.address, c.built, c.latitude, c.longitude,"
     scope = (district, district)
     rows = db.execute(f"""
         SELECT c.complex_id, {metadata}
