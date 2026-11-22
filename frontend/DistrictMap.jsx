@@ -1,18 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import { clusterMarkers, districtCenter } from "./mapData";
-import pendingCoordinateReviewIds from "./map-unverified-complexes.json";
-
-// Coordinates can be archived without marking a complex as currently existing.
-// Hide unverified complexes from map markers until existence status is adjudicated.
-const unverifiedIds = new Set(pendingCoordinateReviewIds);
 const pricedGroup = complex => complex.groups?.find(group =>
   group.predictable && Number.isFinite(Number(group.marker_price_manwon)) &&
   Number(group.marker_price_manwon) > 0) || complex.groups?.find(group =>
   group.marker_price_manwon != null &&
   Number.isFinite(Number(group.marker_price_manwon)) &&
   Number(group.marker_price_manwon) > 0);
-const eligibleForMap = complex => !["demolished", "unconfirmed"].includes(complex.existence_status) &&
-  (complex.existence_status === "active" || !unverifiedIds.has(complex.complex_id)) &&
+const eligibleForMap = complex =>
   Number(complex.trade_count) > 0 && Boolean(pricedGroup(complex));
 
 let sdk;
@@ -87,7 +81,7 @@ function DistrictMap({ district, districtBounds, allComplexes, complexes, onSele
   const [lat, lng] = center || [37.5665, 126.978];
   const width = district ? 0.12 : 0.65;
   const height = district ? 0.09 : 0.42;
-  const [limit, setLimit] = useState(20);
+  const [limit, setLimit] = useState(Infinity);
   const container = useRef(null);
   const instance = useRef(null);
   const redraw = useRef(null);
