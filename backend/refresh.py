@@ -1,4 +1,5 @@
 """Daily KST district refresh, also executable once with --once."""
+from threading import Thread
 import argparse
 from collections import Counter, defaultdict
 from datetime import datetime, time, timedelta, timezone
@@ -173,33 +174,146 @@ def seconds_until_refresh():
     return (next_run - now).total_seconds()
 
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--district", choices=DISTRICTS)
     parser.add_argument("--metadata-dir", type=Path)
     args = parser.parse_args()
-    districts = [args.district] if args.district else list(DISTRICTS)
-    while True:
+
+    districts = (
+        [args.district]
+        if args.district
+        else list(DISTRICTS)
+    )
+
+    # --once: 기존과 같이 1회 실행 후 종료
+    if args.once:
         failed = refresh_many(districts)
-        if not failed:
+
+        if failed:
+            raise SystemExit(
+                "Failed districts: " + ", ".join(failed)
+            )
+
+        today = datetime.now(KST).date()
+        metadata_failed = refresh_automatic_metadata(
+            today, districts
+        )
+
+        if args.metadata_dir:
+            apply_metadata(args.metadata_dir, today)
+
+        if metadata_failed:
+            raise SystemExit(
+                "Failed metadata: " + ", ".join(metadata_failed)
+            )
+        return
+
+    # 1. 일일 실거래 갱신 전용 반복문
+    def daily_worker():
+        print("Daily refresh worker started", flush=True)
+
+        while True:
+            try:
+                failed = refresh_many(districts)
+
+                if failed:
+                    print(
+                        "Daily refresh deferred: "
+                        + ", ".join(failed),
+                        flush=True
+                    )
+                    clock.sleep(600)
+                    continue
+
+                print(
+                    "Daily refresh completed; "
+                    "next run at 06:00 KST",
+                    flush=True
+                )
+
+                clock.sleep(
+                    max(1, seconds_until_refresh())
+                )
+
+            except Exception as exc:
+                print(
+                    f"Daily refresh error: "
+                    f"{type(exc).__name__}; retry in 10 minutes",
+                    flush=True
+                )
+                clock.sleep(600)
+
+    # 2. 메타데이터 갱신 전용 반복문
+    def metadata_worker():
+        print("Metadata refresh worker started", flush=True)
+
+        while True:
+            failed = []
+
             try:
                 today = datetime.now(KST).date()
-                refresh_automatic_metadata(today, districts)
+
+                result = refresh_automatic_metadata(
+                    today, districts
+                )
+                failed.extend(result or [])
+
                 if args.metadata_dir:
-                    apply_metadata(args.metadata_dir, today)
+                    apply_metadata(
+                        args.metadata_dir, today
+                    )
+
             except Exception as exc:
-                failed.append("verified metadata")
-                print(f"Metadata update failed ({type(exc).__name__}); check the verified input.", flush=True)
-        if args.once:
+                failed.append("metadata")
+                print(
+                    f"Metadata update failed: "
+                    f"{type(exc).__name__}",
+                    flush=True
+                )
+
+            remaining = max(
+                1, seconds_until_refresh()
+            )
+
             if failed:
-                raise SystemExit("Failed districts: " + ", ".join(failed))
-            return
-        if failed:
-            clock.sleep(3600)
-        else:
-            clock.sleep(seconds_until_refresh())
+                # 월간 갱신 보류 시 최대 30분 후 재시도
+                wait = min(1800, remaining)
+                print(
+                    f"Metadata pending; retry in "
+                    f"{wait:.0f} seconds",
+                    flush=True
+                )
+            else:
+                # 정상 완료 시 다음 오전 6시에 검사
+                wait = remaining
+                print(
+                    "Metadata refresh completed",
+                    flush=True
+                )
+
+            clock.sleep(max(1, wait))
+
+    # 두 작업을 독립 스레드에서 실행
+    daily_thread = Thread(
+        target=daily_worker,
+        name="daily-refresh"
+    )
+
+    metadata_thread = Thread(
+        target=metadata_worker,
+        name="metadata-refresh"
+    )
+
+    daily_thread.start()
+    metadata_thread.start()
+
+    daily_thread.join()
+    metadata_thread.join()
 
 
 if __name__ == "__main__":
     main()
+

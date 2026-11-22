@@ -27,3 +27,23 @@ CREATE TABLE IF NOT EXISTS complex_registrations (
 CREATE TABLE IF NOT EXISTS complex_geocode_pending (
     complex_id text PRIMARY KEY REFERENCES complexes(complex_id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS kapt_metadata_cache (
+    batch TEXT NOT NULL,
+    kapt_code TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (batch, kapt_code)
+);
+
+CREATE TABLE IF NOT EXISTS kapt_metadata_pending (
+    batch TEXT NOT NULL,
+    district TEXT NOT NULL,
+    kapt_code TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    reason TEXT NOT NULL DEFAULT 'EMPTY_DETAIL',
+    attempts INTEGER NOT NULL DEFAULT 1,
+    last_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    next_retry_at TIMESTAMPTZ,
+    PRIMARY KEY (batch, kapt_code)
+);
