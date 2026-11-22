@@ -88,7 +88,7 @@ def kapt_codes(district, key):
     page = 1
     expected = None
     while True:
-        body = kapt_body("AptListService4/getSigunguAptList", key,
+        body = kapt_body("AptListService4/getSigunguAptList4", key,
                          sigunguCode=district, pageNo=page, numOfRows=100)
         total = int(body["totalCount"])
         items = body.get("items") or []
