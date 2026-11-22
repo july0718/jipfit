@@ -17,3 +17,13 @@ CREATE TABLE IF NOT EXISTS complex_geocode_attempts (
     address text NOT NULL,
     attempted_on date NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS complex_registrations (
+    complex_id text PRIMARY KEY REFERENCES complexes(complex_id),
+    refresh_day date NOT NULL,
+    district text NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS complex_geocode_pending (
+    complex_id text PRIMARY KEY REFERENCES complexes(complex_id) ON DELETE CASCADE
+);

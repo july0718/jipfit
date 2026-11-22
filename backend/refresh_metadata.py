@@ -41,7 +41,14 @@ def update_complex(db, cid, address, changes, *, expected_name=None):
     if expected_name is not None:
         query += " AND name=%s"
         values += (expected_name,)
-    return db.execute(query, values).rowcount == 1
+    if db.execute(query, values).rowcount != 1:
+        return False
+    if "latitude" in changes and "longitude" in changes:
+        db.execute("DELETE FROM complex_geocode_pending WHERE complex_id=%s", (cid,))
+    elif "address" in changes and changes["address"] != address:
+        db.execute("INSERT INTO complex_geocode_pending VALUES (%s) ON CONFLICT DO NOTHING", (cid,))
+        db.execute("DELETE FROM complex_geocode_attempts WHERE complex_id=%s", (cid,))
+    return True
 
 
 def apply_file(path, year):

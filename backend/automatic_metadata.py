@@ -47,10 +47,11 @@ def geocode(today, headers, districts):
         rows = db.execute("""
             SELECT c.complex_id, c.address FROM complexes c
             LEFT JOIN complex_geocode_attempts a USING (complex_id)
-            WHERE (c.latitude IS NULL OR c.longitude IS NULL)
+            LEFT JOIN complex_geocode_pending p USING (complex_id)
+            WHERE (c.latitude IS NULL OR c.longitude IS NULL OR p.complex_id IS NOT NULL)
               AND (a.attempted_on IS NULL OR a.address <> c.address OR a.attempted_on <= %s::date - 7)
               AND split_part(c.complex_id,' ',2) = ANY(%s)
-              AND EXISTS (SELECT 1 FROM trades t WHERE t.complex_id=c.complex_id AND NOT t.is_cancelled AND t.price_manwon > 0)
+              AND (p.complex_id IS NOT NULL OR EXISTS (SELECT 1 FROM trades t WHERE t.complex_id=c.complex_id AND NOT t.is_cancelled AND t.price_manwon > 0))
             ORDER BY a.attempted_on NULLS FIRST, c.complex_id
             LIMIT 50
         """, (today, [DISTRICTS[code] for code in districts])).fetchall()
@@ -64,11 +65,18 @@ def geocode(today, headers, districts):
             cache[address] = exact_point(address, response["addresses"])
         point = cache[address]
         with psycopg.connect(connect_timeout=8) as db:
+            # Serialize with verified metadata edits and discard stale results.
+            if not db.execute("""
+                SELECT 1 FROM complexes WHERE complex_id=%s AND address=%s FOR UPDATE
+            """, (cid, address)).fetchone():
+                continue
             if point:
                 updated += db.execute("""
                     UPDATE complexes SET latitude=%s, longitude=%s
-                    WHERE complex_id=%s AND address=%s AND (latitude IS NULL OR longitude IS NULL)
-                """, (*point, cid, address)).rowcount
+                    WHERE complex_id=%s AND address=%s AND (latitude IS NULL OR longitude IS NULL
+                        OR EXISTS (SELECT 1 FROM complex_geocode_pending WHERE complex_id=%s))
+                """, (*point, cid, address, cid)).rowcount
+                db.execute("DELETE FROM complex_geocode_pending WHERE complex_id=%s", (cid,))
             db.execute("""
                 INSERT INTO complex_geocode_attempts(complex_id,address,attempted_on) VALUES (%s,%s,%s)
                 ON CONFLICT (complex_id) DO UPDATE

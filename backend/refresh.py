@@ -23,7 +23,7 @@ KST = timezone(timedelta(hours=9))
 FIELDS = "complex_id,area_group,contract_date,area,floor,price_manwon,is_cancelled"
 
 
-def reconcile(db, month, complexes, wanted, district, *, history=False):
+def reconcile(db, month, complexes, wanted, district, *, history=False, refresh_day=None):
     first = month.start_time.date()
     end = (month + 1).start_time.date()
     with db.cursor() as cur:
@@ -49,10 +49,18 @@ def reconcile(db, month, complexes, wanted, district, *, history=False):
             for (cid, *trade), count in wanted.items():
                 remapped[(aliases.get(cid, cid), *trade)] += count
             wanted = remapped
-        cur.executemany("""
+        insert_complex = """
             INSERT INTO complexes(complex_id,name,address,built) VALUES (%s,%s,%s,%s)
             ON CONFLICT DO NOTHING
-        """, complexes.values())
+        """
+        if refresh_day is None:
+            cur.executemany(insert_complex, complexes.values())
+        else:
+            cur.executemany(f"""
+                WITH inserted AS ({insert_complex} RETURNING complex_id)
+                INSERT INTO complex_registrations(complex_id,refresh_day,district)
+                SELECT complex_id,%s,%s FROM inserted
+            """, ((*row, refresh_day, district) for row in complexes.values()))
         areas = defaultdict(list)
         for cid, group, _, area, _, _, _ in wanted:
             areas[cid, group].append(float(area))
@@ -130,7 +138,7 @@ def refresh(district, temp):
         added = removed = 0
         for month in pd.period_range(start, anchor):
             complexes, rows = fetch_month(month.strftime("%Y%m"), district)
-            a, r = reconcile(db, month, complexes, rows, district)
+            a, r = reconcile(db, month, complexes, rows, district, refresh_day=today)
             added += a
             removed += r
         subprocess.run([sys.executable, str(ROOT/"fetch_macro.py"), "--district", district, "--end-month", str(anchor-1)],
