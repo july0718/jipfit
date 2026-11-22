@@ -2,6 +2,7 @@
 from collections import defaultdict
 import json
 import os
+import time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -77,7 +78,20 @@ def geocode(today, headers, districts):
 
 
 def kapt_body(endpoint, key, **params):
-    response = read_json(MOLIT_URL + "/" + endpoint, {"serviceKey": key, **params})["response"]
+    for attempt in range(3):
+        payload = read_json(MOLIT_URL + "/" + endpoint, {"serviceKey": key, **params})
+        if "OpenAPI_ServiceResponse" not in payload:
+            break
+        header = payload["OpenAPI_ServiceResponse"].get("cmmMsgHeader", {})
+        code = str(header.get("returnReasonCode", ""))
+        if code == "04" and attempt < 2:
+            time.sleep(2 ** (attempt + 1))
+            continue
+        # Only log a short numeric reason code; never log the credentialed URL.
+        reason = code if code.isascii() and code.isdigit() and len(code) <= 3 else "unknown"
+        print(f"K-apt {endpoint}: portal error {reason} after {attempt + 1} request(s)", flush=True)
+        raise ValueError("K-apt portal error")
+    response = payload["response"]
     if str(response["header"]["resultCode"]) not in {"0", "00", "000", "0000"}:
         raise ValueError("K-apt API returned an error")
     return response["body"]
