@@ -6,67 +6,10 @@ import numpy as np
 import pandas as pd
 
 from districts import GWANGJIN
-from features import build_inputs
-from joint_model import HORIZONS, JointCurve
-from molit import fetch_month
+from evaluate_districts import PILOT, audit_panel, evaluate as evaluate_panel, historical_trades, train
+from joint_model import HORIZONS
 
 ROOT = Path(__file__).resolve().parent
-PILOT = "11200"
-
-
-def historical_trades(code, first, last, cache):
-    if code == GWANGJIN:
-        base = ROOT / "db/gwangjin"
-        trades = pd.read_csv(base / "trades.csv").merge(
-            pd.read_csv(base / "complexes.csv")[["complex_id", "built"]], validate="many_to_one")
-    else:
-        parts = []
-        for month in pd.period_range(first, last, freq="M"):
-            path = cache / f"{code}-{month}.csv"
-            if not path.exists():
-                try:
-                    complexes, counts = fetch_month(month.strftime("%Y%m"), code)
-                except Exception as exc:
-                    raise RuntimeError(f"{code} {month}: collection failed ({type(exc).__name__}); "
-                                       "check the updater API key/network and retry with the same cache") from None
-                records = []
-                for (cid, area_group, day, area, floor, price, cancelled), count in counts.items():
-                    if not cancelled:
-                        records.extend([(cid, area_group, day, area, floor, price, complexes[cid][3])] * count)
-                frame = pd.DataFrame(records, columns=["complex_id", "area_group", "contract_date", "area",
-                                                       "floor", "price_manwon", "built"])
-                temp = path.with_suffix(".tmp")
-                frame.to_csv(temp, index=False)
-                temp.replace(path)
-                print(f"Collected {code} {month}: {len(frame)} trades", flush=True)
-            parts.append(pd.read_csv(path))
-        trades = pd.concat(parts, ignore_index=True)
-    trades["period"] = pd.to_datetime(trades.contract_date).dt.to_period("M")
-    return trades.loc[trades.period.between(first, last)].copy()
-
-
-def audit_panel(trades, macro, origins):
-    trades["ppm"] = trades.price_manwon / trades.area
-    keys = ["complex_id", "area_group"]
-    monthly = trades.groupby(keys + ["period"]).ppm.median().unstack("period")
-    frames = []
-    for origin in origins:
-        history = trades.loc[trades.period.between(origin - 19, origin - 2)]
-        rows = build_inputs(history, origin, macro).set_index(keys)
-        for horizon in HORIZONS:
-            end = origin + int(horizon)
-            target = monthly.reindex(columns=pd.period_range(end - 2, end, freq="M")).median(axis=1)
-            rows[f"y{horizon}"] = np.log(target.reindex(rows.index)) - rows.log_current
-        frames.append(rows.reset_index())
-    return pd.concat(frames, ignore_index=True)
-
-
-def train(name, frame, cutoff, spec, features):
-    available = pd.PeriodIndex(frame.month, freq="M").asi8[:, None] + HORIZONS + 2
-    y = frame[[f"y{h}" for h in HORIZONS]].to_numpy()
-    if not np.all((np.isfinite(y) & (available <= cutoff.ordinal)).any(axis=0)):
-        raise ValueError(f"{name}: missing mature training targets")
-    return JointCurve(spec, features).fit(frame, y, available, cutoff)
 
 
 def score(district, test, predictions, asof):
@@ -76,7 +19,6 @@ def score(district, test, predictions, asof):
         observed = test[f"y{h}"].notna() & (pd.PeriodIndex(test.month, freq="M") + int(h) + 2 <= asof)
         if not observed.any():
             continue
-            'raise ValueError(f"No mature observations: {district} {h}m")'
         actual = 100 * np.expm1(test.loc[observed, f"y{h}"].to_numpy())
         for name, rates in predictions.items():
             error = 100 * np.expm1(rates[observed.to_numpy(), j]) - actual
@@ -88,21 +30,7 @@ def score(district, test, predictions, asof):
 
 
 def evaluate(panel, cutoff, tests, asof, features, spec):
-    models = {}
-    for name, districts in [("pooled", [GWANGJIN, PILOT]), ("gwangjin", [GWANGJIN]), ("seongdong", [PILOT])]:
-        frame = panel[panel.district.isin(districts) & (panel.month < str(cutoff))]
-        if frame.empty:
-            continue
-        models[name] = train(name, frame, cutoff, spec, features)
-    metrics = []
-    for district in (GWANGJIN, PILOT):
-        test = panel[(panel.district == district) & panel.month.isin(tests.astype(str))]
-        if test.empty:
-            continue
-        names = ["gwangjin", "pooled", "seongdong"] if district == PILOT else ["gwangjin", "pooled"]
-        predictions = {name: models[name].predict(test) for name in names}
-        metrics.extend(score(district, test, predictions, asof))
-    return pd.DataFrame(metrics)
+    return evaluate_panel(panel, cutoff, tests, asof, features, spec, score_fn=score)
 
 
 def evaluate_seoul(cache, tests, asof, artifact):

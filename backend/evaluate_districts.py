@@ -86,7 +86,7 @@ def score(district, test, predictions, asof):
     return metrics
 
 
-def evaluate(panel, cutoff, tests, asof, features, spec):
+def evaluate(panel, cutoff, tests, asof, features, spec, *, score_fn=score):
     models = {}
     for name, districts in [("pooled", [GWANGJIN, PILOT]), ("gwangjin", [GWANGJIN]), ("seongdong", [PILOT])]:
         frame = panel[panel.district.isin(districts) & (panel.month < str(cutoff))]
@@ -100,7 +100,7 @@ def evaluate(panel, cutoff, tests, asof, features, spec):
             continue
         names = ["gwangjin", "pooled", "seongdong"] if district == PILOT else ["gwangjin", "pooled"]
         predictions = {name: models[name].predict(test) for name in names}
-        metrics.extend(score(district, test, predictions, asof))
+        metrics.extend(score_fn(district, test, predictions, asof))
     return pd.DataFrame(metrics)
 
 

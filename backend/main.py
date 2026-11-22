@@ -10,8 +10,8 @@ from account_api import router
 from database import connect
 from districts import DISTRICTS
 
-from math import expm1
-from inference import HORIZONS, forecast, load_model, predict_growth
+from complex_list import load_home_rows
+from inference import forecast, load_model
 
 
 @asynccontextmanager
@@ -64,21 +64,9 @@ def list_districts():
 def list_complexes(include_sort: bool = False, district: str | None = None, live_only: bool = False):
     if district is not None and district not in DISTRICTS.values():
         raise HTTPException(422, "지원하지 않는 자치구입니다.")
-    metadata = "" if live_only else "c.name, c.address, c.built, c.latitude, c.longitude,"
-    scope = (district, district)
     with connect() as db:
-        rows = db.execute(f"""
-            SELECT c.complex_id, {metadata}
-                   a.area_group, a.representative_area,
-                   (m.complex_id IS NOT NULL) AS predictable
-            FROM complexes c JOIN area_groups a USING (complex_id)
-            LEFT JOIN district_input_months d ON d.district=split_part(c.complex_id,' ',2)
-            LEFT JOIN model_inputs m ON m.complex_id=c.complex_id AND m.area_group=a.area_group AND m.month=d.month
-            WHERE (%s::text IS NULL OR split_part(c.complex_id, ' ', 2) = %s)
-            ORDER BY c.name, c.complex_id, a.area_group
-        """, scope).fetchall()
-        if not include_sort:
-            return rows
+        return load_home_rows(db, district=district, include_sort=include_sort,
+                              live_only=live_only, model=app.state.model)
         stats = {r["complex_id"]: r for r in db.execute("""
             SELECT complex_id, count(*) AS trade_count, max(contract_date) AS last_trade
             FROM trades

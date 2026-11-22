@@ -7,7 +7,7 @@ The manifest is published last. No trade rows are modified or deleted.
 import argparse
 from collections import defaultdict
 from datetime import datetime, timezone
-from math import expm1, isfinite
+from math import isfinite
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -19,63 +19,13 @@ from fastapi.encoders import jsonable_encoder
 
 from check_public_json import check, trade_filename
 from districts import DISTRICTS
-from inference import HORIZONS, load_model, predict_growth
+from complex_list import load_home_rows
 
 
 def write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(jsonable_encoder(payload), ensure_ascii=False,
                                separators=(",", ":"), allow_nan=False), encoding="utf-8")
-
-
-def load_home_rows(db):
-    # Same public response fields as GET /api/complexes?include_sort=true.
-    homes = db.execute("""
-        SELECT c.complex_id,c.name,c.address,c.built,c.latitude,c.longitude,
-               a.area_group,a.representative_area,
-               (m.complex_id IS NOT NULL) AS predictable
-        FROM complexes c JOIN area_groups a USING(complex_id)
-        LEFT JOIN district_input_months d ON d.district=split_part(c.complex_id,' ',2)
-        LEFT JOIN model_inputs m ON m.complex_id=c.complex_id
-             AND m.area_group=a.area_group AND m.month=d.month
-        ORDER BY c.name,c.complex_id,a.area_group
-    """).fetchall()
-    stats = {r["complex_id"]: r for r in db.execute("""
-        SELECT complex_id,count(*) AS trade_count,max(contract_date) AS last_trade
-        FROM trades WHERE NOT is_cancelled GROUP BY complex_id
-    """)}
-    prices = {(r["complex_id"], r["area_group"]): r["price_manwon"]
-              for r in db.execute("""
-                  SELECT DISTINCT ON (complex_id,area_group)
-                      complex_id,area_group,price_manwon
-                  FROM trades WHERE NOT is_cancelled
-                  ORDER BY complex_id,area_group,contract_date DESC,trade_id DESC
-              """)}
-    inputs = db.execute("""
-        SELECT DISTINCT ON (complex_id) m.*
-        FROM model_inputs m JOIN district_input_months d
-          ON d.district=split_part(m.complex_id,' ',2) AND m.month=d.month
-        ORDER BY complex_id,area_group
-    """).fetchall()
-    returns = {}
-    if inputs:
-        model = load_model()
-        for row, rates in zip(inputs, predict_growth(model, inputs), strict=True):
-            returns[row["complex_id"]] = {
-                horizon: 100 * expm1(float(rate)) for horizon, rate in zip(HORIZONS, rates, strict=True)
-                if isfinite(float(rate))
-            }
-    for home in homes:
-        cid = home["complex_id"]
-        key = (cid, home["area_group"])
-        marker_price = prices.get(key)
-        if marker_price is not None and not isfinite(float(marker_price)):
-            marker_price = None
-        home["marker_price_manwon"] = marker_price
-        home["trade_count"] = stats.get(cid, {}).get("trade_count", 0)
-        home["last_trade"] = stats.get(cid, {}).get("last_trade")
-        home["sort_returns"] = returns.get(cid, {})
-    return homes
 
 
 def build_release(staging):
