@@ -112,3 +112,24 @@ test("district navigation never falls back to City Hall while another ward is lo
   // The whole-Seoul view alone is allowed to use the City Hall center.
   assert.deepEqual(districtCenter("", [], null), [37.5665, 126.978]);
 });
+
+test("fresh DB coordinates replace the monthly copy and newly listed complexes load full data", async t => {
+  const existing = row("광진구");
+  const added = {...existing, complex_id: existing.complex_id + " 신규"};
+  const seen = [];
+  t.mock.method(globalThis, "fetch", async url => {
+    seen.push(url);
+    if (url === "/api/districts") return reflect(districts);
+    if (url.startsWith("/metadata/")) return reflect([{...existing, name: "이전 이름", latitude: null, longitude: null}]);
+    const current = {...existing, name: "현재 이름", latitude: 37.55, longitude: 127.07};
+    if (url.includes("live_only=true")) return reflect([current, added]);
+    return reflect([current, {...added, address: "서울 광진구 신규", latitude: 37.56, longitude: 127.08, marker_price_manwon: 100000}]);
+  });
+  const {readHomes} = await fresh("daily-coordinates");
+  const [existingHome, newHome] = await readHomes(["광진구"]);
+  assert.equal(existingHome.latitude, 37.55);
+  assert.equal(existingHome.name, "현재 이름");
+  assert.equal(newHome.longitude, 127.08);
+  assert.equal(newHome.marker_price_manwon, 100000);
+  assert.ok(seen.some(url => url.startsWith("/api/complexes?") && !url.includes("live_only")));
+});

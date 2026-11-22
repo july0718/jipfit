@@ -61,6 +61,9 @@ services:
       PGUSER: jipfit
       PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       MOLIT_SERVICE_KEY: ${MOLIT_SERVICE_KEY:-}
+      KAPT_SERVICE_KEY: ${KAPT_SERVICE_KEY:-}
+      NAVER_MAPS_API_KEY_ID: ${NAVER_MAPS_API_KEY_ID:-}
+      NAVER_MAPS_API_KEY: ${NAVER_MAPS_API_KEY:-}
     volumes:
       - ./verified-metadata:/metadata:ro
 volumes:

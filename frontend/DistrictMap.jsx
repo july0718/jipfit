@@ -33,7 +33,7 @@ export function loadMaps() {
         }
       }
       script.src = "https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=" +
-        encodeURIComponent(window.NAVER_MAP_CLIENT_ID) + "&submodules=geocoder";
+        encodeURIComponent(window.NAVER_MAP_CLIENT_ID);
       script.onload = checkReady;
       script.onerror = () => fail("지도 스크립트 연결 실패");
       poll = setInterval(checkReady, 50);
