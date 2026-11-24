@@ -3,12 +3,14 @@ import numpy as np
 import pandas as pd
 
 from macro_features import MACRO_FEATURES, load_monthly_macro
+from indexed_reference import indexed_log_current, published_index
 
 
 def build_inputs(trades, anchor, macro_path):
     macro, _ = load_monthly_macro(macro_path, [anchor])
     if not macro.iloc[0]["macro_complete"]:
         raise ValueError("Update macro_raw.csv before publishing this forecast month")
+    district_index = published_index(macro_path, anchor)
     trades = trades.copy()
     trades["month"] = pd.to_datetime(trades.contract_date).dt.to_period("M")
     trades["ppm"] = trades.price_manwon.astype(float) / trades.area.astype(float)
@@ -35,6 +37,7 @@ def build_inputs(trades, anchor, macro_path):
             complex_id=cid, area_group=int(group), month=str(anchor),
             representative_area=last_year.area.median(), built=frame.built.dropna().iloc[-1],
             age=anchor.year-frame.built.dropna().iloc[-1], log_current=np.log(current),
+            indexed_log_current=indexed_log_current(prices.iloc[-6:], district_index),
             count6=frame["count"].iloc[-6:].sum(), count12=count12,
             momentum6=momentum(6), momentum12=momentum(12),
             volatility=np.log(last_year.ppm).std(),

@@ -1,4 +1,5 @@
 import math
+import os
 from pathlib import Path
 
 import joblib
@@ -24,7 +25,11 @@ def predict_growth(model, rows):
 
 def forecast(model, row):
     growth = predict_growth(model, [row])[0]
-    reference = math.exp(row["log_current"]) * float(row["representative_area"])
+    indexed = row.get("indexed_log_current")
+    log_current = row["log_current"]
+    if os.getenv("JIPFIT_INDEXED_REFERENCE") == "1" and indexed is not None and math.isfinite(indexed):
+        log_current = indexed
+    reference = math.exp(log_current) * float(row["representative_area"])
     return {
         "complex_id": row["complex_id"],
         "area_group": row["area_group"],

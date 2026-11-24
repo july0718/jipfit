@@ -22,6 +22,7 @@ services:
       db:
         condition: service_healthy
     environment:
+      JIPFIT_INDEXED_REFERENCE: ${JIPFIT_INDEXED_REFERENCE:-0}
       PGHOST: db
       PGPORT: 5432
       PGDATABASE: jipfit
