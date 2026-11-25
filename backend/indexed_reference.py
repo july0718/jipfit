@@ -30,3 +30,7 @@ def indexed_log_current(prices: pd.Series, index: pd.Series) -> float | None:
     ratios = (index.iloc[-1] / source).fillna(1.0)
     adjusted = (prices * ratios).median()
     return float(np.log(adjusted)) if np.isfinite(adjusted) and adjusted > 0 else None
+
+
+def uses_indexed_reference(district: str, months: int) -> bool:
+    return (district, months) != ("11680", 12)

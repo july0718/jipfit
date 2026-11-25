@@ -12,6 +12,7 @@ import psycopg
 
 from districts import DISTRICTS, GWANGJIN
 from evaluate_districts import audit_panel, train
+from indexed_reference import uses_indexed_reference
 from joint_model import HORIZONS
 from macro_features import load_monthly_macro
 from train_seoul import TRADE_START, read_trades
@@ -175,7 +176,8 @@ def main():
                         growth = predictions["seoul"][observed, j]
                         realized = area * np.exp(original + y[observed])
                         baseline = np.abs(area * np.exp(original + growth) - realized)
-                        candidate = np.abs(area * np.exp(indexed + growth) - realized)
+                        reference = indexed if uses_indexed_reference(code, int(h)) else original
+                        candidate = np.abs(area * np.exp(reference + growth) - realized)
                         if not (np.isfinite(baseline).all() and np.isfinite(candidate).all()):
                             raise ValueError(f"Invalid price comparison for {code} {month}")
                         price_scores.append(dict(district=code, month=str(month), horizon=int(h),
