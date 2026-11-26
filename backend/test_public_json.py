@@ -136,6 +136,15 @@ class SnapshotTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "evidence"):
             validate(doc, batch, 2026)
 
+    def test_snapshot_preserves_demolished_complex_area_groups_and_trade_history(self):
+        path = self.release + f"/complexes/{self.first_code}.json"
+        doc = json.loads((self.root / path).read_text(encoding="utf-8"))
+        doc[0]["demolition_confirmed"] = True
+        self.write(path, doc)
+        public = self.root / "public"
+        manifest, _ = materialize(public, self.root, self.manifest)
+        self.assertEqual(check(public, manifest=manifest), self.manifest["totals"])
+
 
 if __name__ == "__main__":
     unittest.main()

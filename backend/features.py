@@ -5,6 +5,17 @@ import pandas as pd
 from macro_features import MACRO_FEATURES, load_monthly_macro
 
 
+def input_month_range(anchor):
+    """Return (first_period, last_period) = (anchor - 19, anchor - 2) for model inputs."""
+    last = anchor - 2
+    return last - 17, last
+
+
+def is_in_input_window(month, anchor):
+    first, last = input_month_range(anchor)
+    return first <= month <= last
+
+
 def build_inputs(trades, anchor, macro_path):
     macro, _ = load_monthly_macro(macro_path, [anchor])
     if not macro.iloc[0]["macro_complete"]:
@@ -13,8 +24,8 @@ def build_inputs(trades, anchor, macro_path):
     trades["month"] = pd.to_datetime(trades.contract_date).dt.to_period("M")
     trades["ppm"] = trades.price_manwon.astype(float) / trades.area.astype(float)
     trades["area"] = trades.area.astype(float)
-    last = anchor - 2
-    periods = pd.period_range(last - 17, last, freq="M")
+    first_period, last = input_month_range(anchor)
+    periods = pd.period_range(first_period, last, freq="M")
     recent = trades[trades.month.between(periods[0], last)]
     monthly = recent.groupby(["complex_id", "area_group", "month"]).agg(
         ppm=("ppm", "median"), count=("ppm", "size"), area=("area", "median"),

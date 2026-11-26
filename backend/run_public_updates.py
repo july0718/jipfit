@@ -7,11 +7,9 @@ from time import sleep
 
 import psycopg
 
-from automatic_metadata import refresh_automatic_metadata
 from districts import DISTRICTS
 from publish_snapshots import R2, publish, rollback
-from refresh import KST, refresh_many, seconds_until_refresh
-from refresh_metadata import apply_metadata
+from refresh import KST, run_once, seconds_until_refresh
 
 
 @contextmanager
@@ -24,12 +22,10 @@ def updater_lock():
 
 
 def run(out, inbox, remote):
-    failed = refresh_many(DISTRICTS)
-    if failed:
-        raise RuntimeError("Refresh failed for: " + ", ".join(failed))
-    today = datetime.now(KST).date()
-    refresh_automatic_metadata(today, DISTRICTS)
-    apply_metadata(inbox, today)
+    try:
+        run_once(DISTRICTS, metadata_dir=inbox)
+    except SystemExit as exc:
+        raise RuntimeError(str(exc)) from None
     publish(out, remote)
 
 

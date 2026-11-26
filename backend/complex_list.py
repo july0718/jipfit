@@ -4,18 +4,23 @@ from inference import HORIZONS, load_model, predict_growth
 
 
 def load_home_rows(db, *, district=None, include_sort=True, live_only=False, model=None):
-    metadata = "c.name, c.latitude, c.longitude," if live_only else "c.name, c.address, c.built, c.latitude, c.longitude,"
+    metadata = "c.name, c.address, c.built, c.latitude, c.longitude,"
     scope = (district, district)
     rows = db.execute(f"""
         SELECT c.complex_id, {metadata}
                a.area_group, a.representative_area,
-               (m.complex_id IS NOT NULL) AS predictable
+               (m.complex_id IS NOT NULL) AS predictable,
+               COALESCE(ls.existence = 'demolished', FALSE) AS demolition_confirmed
         FROM complexes c JOIN area_groups a USING (complex_id)
+        LEFT JOIN complex_lifecycle_state ls USING (complex_id)
         LEFT JOIN district_input_months d ON d.district=split_part(c.complex_id,' ',2)
         LEFT JOIN model_inputs m ON m.complex_id=c.complex_id AND m.area_group=a.area_group AND m.month=d.month
         WHERE (%s::text IS NULL OR split_part(c.complex_id, ' ', 2) = %s)
         ORDER BY c.name, c.complex_id, a.area_group
     """, scope).fetchall()
+    for row in rows:
+        if isinstance(row, dict):
+            row["demolition_confirmed"] = bool(row.get("demolition_confirmed", False))
     if not include_sort:
         return rows
     stats = {r["complex_id"]: r for r in db.execute("""

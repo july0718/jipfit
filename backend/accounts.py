@@ -65,7 +65,8 @@ def profile(db, user):
     rows = db.execute("""
         SELECT f.complex_id,f.area_group,c.name,c.address,
                (SELECT count(*) FROM trades t WHERE (t.complex_id,t.area_group)=(f.complex_id,f.area_group)
-                 AND NOT t.is_cancelled AND t.trade_id>f.seen_trade) AS new_trades,
+                 AND NOT t.is_cancelled AND t.trade_id>f.seen_trade
+                 AND t.contract_date >= (date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')::date - interval '3 months')) AS new_trades,
                (SELECT max(month) FROM model_inputs m WHERE (m.complex_id,m.area_group)=(f.complex_id,f.area_group)
                  AND m.month>f.seen_month) AS new_month,
                COALESCE((SELECT max(trade_id) FROM trades t WHERE (t.complex_id,t.area_group)=(f.complex_id,f.area_group)

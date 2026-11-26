@@ -13,3 +13,7 @@ frontend/public/data/
 
 # Raw, per-complex holdout results must stay local. Publish only aggregated JSON.
 /backend/holdout-output/
+
+# Local editor settings and database dumps
+.vscode/
+*.dump
