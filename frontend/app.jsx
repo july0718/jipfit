@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 
 import { ForecastChart, TradeChart, ComparisonChart } from "./PriceCharts";
-import { districtOf, readDistricts, readHomes, readTrades } from "./staticData";
+import { districtOf, invalidateHomesCache, readDistricts, readHomes, readTrades } from "./staticData";
 import { districtNames } from "./mapData";
 import Account from "./Account";
 import DistrictMap from "./DistrictMap";
@@ -251,7 +251,7 @@ function App() {
     return Array.from(index.values());
   }, [homes]);
   const visible = useMemo(() => complexes.filter(c =>
-    (!district || c.address.split(" ")[1] === district) &&
+    (!district || districtOf(c.complex_id) === district) &&
     (c.name + " " + c.address).includes(query.trim()) && matchesFacilities(c.facilities,facilityFilters)
   ).map(c => matchingComplex(c, ranges, onlyReady)).filter(Boolean).sort((a, b) => {
     if (sort === "recent") {
@@ -281,12 +281,40 @@ function App() {
     const controller = new AbortController();
     setListError("");
     setListPage(0);
-    readHomes(JSON.parse(scope), controller.signal).then(rows => {
-      if (!controller.signal.aborted) setHomes(rows);
-    }).catch(err => {
-      if (!controller.signal.aborted) setListError(err.message);
-    });
-    return () => controller.abort();
+    let inFlight = false;
+    let loaded = false;
+    const refreshHomes = async (background = false) => {
+      if (inFlight || controller.signal.aborted) return;
+      inFlight = true;
+      try {
+        if (background) invalidateHomesCache();
+        const rows = await readHomes(JSON.parse(scope), controller.signal);
+        if (!controller.signal.aborted) {
+          loaded = true;
+          setHomes(rows);
+          setListError("");
+          if (background) {
+            setNotice(prev => prev === "목록 자동 갱신에 실패해 이전 목록을 유지합니다." ? "" : prev);
+          }
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          if (background && loaded) {
+            setNotice("목록 자동 갱신에 실패해 이전 목록을 유지합니다.");
+          } else {
+            setListError(err.message);
+          }
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    refreshHomes(false);
+    const timer = window.setInterval(() => refreshHomes(true), 5 * 60 * 1000);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
   }, [attempt, scope]);
   useEffect(() => () => pending.current?.abort(), []);
 

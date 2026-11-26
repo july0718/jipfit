@@ -1,4 +1,34 @@
 // Bounds order: south, west, north, east.
+export const pricedGroup = complex => complex?.groups?.find(group =>
+  group.predictable && Number.isFinite(Number(group.marker_price_manwon)) &&
+  Number(group.marker_price_manwon) > 0) || complex?.groups?.find(group =>
+  group.marker_price_manwon != null &&
+  Number.isFinite(Number(group.marker_price_manwon)) &&
+  Number(group.marker_price_manwon) > 0);
+
+export const isDemolitionConfirmed = complex =>
+  Boolean(complex?.demolition_confirmed === true ||
+    complex?.groups?.some(group => group?.demolition_confirmed === true));
+
+export function hasValidCoordinates(complex) {
+  if (complex?.latitude == null || complex?.longitude == null) return false;
+  const lat = Number(complex.latitude);
+  const lng = Number(complex.longitude);
+  return Number.isFinite(lat) && Number.isFinite(lng) &&
+    lat >= 33 && lat <= 39 && lng >= 124 && lng <= 132;
+}
+
+export const eligibleForMap = complex =>
+  !isDemolitionConfirmed(complex) &&
+  (complex?.trade_count == null || Number(complex.trade_count) > 0) &&
+  Boolean(pricedGroup(complex));
+
+export const isMapPositioned = complex =>
+  eligibleForMap(complex) && hasValidCoordinates(complex);
+
+export const positionedComplexes = complexes =>
+  (complexes || []).filter(isMapPositioned);
+
 export function districtNames(districts, bounds) {
   if (!bounds) return districts.filter(d => d.name === "광진구").map(d => d.name);
   const [south, west, north, east] = bounds;

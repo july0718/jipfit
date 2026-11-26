@@ -27,10 +27,14 @@ for (const {code, name, complexes} of districts) {
   }
   const records = new Map();
   for (const row of rows) {
-    const {complex_id, name: title, address, built, latitude, longitude} = row;
+    const {complex_id, name: title, address, built, latitude, longitude, demolition_confirmed = false} = row;
     if (complex_id.split(" ")[1] !== name || !title || !address ||
-        [built, latitude, longitude].includes(undefined)) throw new Error("Incomplete metadata for " + complex_id);
-    records.set(complex_id, {complex_id, name: title, address, built, latitude, longitude});
+        [built, latitude, longitude].includes(undefined) || typeof demolition_confirmed !== "boolean")
+      throw new Error("Incomplete metadata for " + complex_id);
+    records.set(complex_id, {
+      complex_id, name: title, address, built, latitude, longitude,
+      demolition_confirmed,
+    });
   }
   if (!records.size) throw new Error("Empty district: " + name);
   files.set(code, JSON.stringify([...records.values()].sort((a,b) => a.complex_id < b.complex_id ? -1 : 1)) + "\n");
