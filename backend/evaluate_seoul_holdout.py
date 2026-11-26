@@ -12,6 +12,7 @@ import psycopg
 
 from districts import DISTRICTS, GWANGJIN
 from evaluate_districts import audit_panel, train
+from indexed_reference import uses_indexed_reference
 from joint_model import HORIZONS
 from macro_features import load_monthly_macro
 from train_seoul import TRADE_START, read_trades
@@ -68,6 +69,7 @@ def main():
         index_col="reference_month",
     )
 
+    price_scores = []
     records = []
     individual_seoul = []
 
@@ -166,6 +168,21 @@ def main():
 
                         actual = 100 * np.expm1(y[observed])
 
+                        area = test.loc[observed, "representative_area"].to_numpy(dtype=float)
+                        original = test.loc[observed, "log_current"].to_numpy(dtype=float)
+                        indexed = test.loc[observed, "indexed_log_current"].fillna(
+                            test.loc[observed, "log_current"]
+                        ).to_numpy(dtype=float)
+                        growth = predictions["seoul"][observed, j]
+                        realized = area * np.exp(original + y[observed])
+                        baseline = np.abs(area * np.exp(original + growth) - realized)
+                        reference = indexed if uses_indexed_reference(code, int(h)) else original
+                        candidate = np.abs(area * np.exp(reference + growth) - realized)
+                        if not (np.isfinite(baseline).all() and np.isfinite(candidate).all()):
+                            raise ValueError(f"Invalid price comparison for {code} {month}")
+                        price_scores.append(dict(district=code, month=str(month), horizon=int(h),
+                                                 n=len(area), base_sum=baseline.sum(),
+                                                 indexed_sum=candidate.sum()))
                         for name, prediction in predictions.items():
                             predicted = (
                                 100 * np.expm1(
@@ -268,6 +285,17 @@ def main():
         prefix.parent / f"{prefix.name}-seoul-residuals.csv",
         index=False,
     )
+    prices = pd.DataFrame(price_scores)
+    for label, keys in [("overall", ["horizon"]), ("district", ["district", "horizon"]),
+                        ("month", ["month", "horizon"])]:
+        totals = prices.groupby(keys)[["n", "base_sum", "indexed_sum"]].sum()
+        totals["base_mae_manwon"] = totals.base_sum / totals.n
+        totals["indexed_mae_manwon"] = totals.indexed_sum / totals.n
+        totals["reduction_manwon"] = totals.base_mae_manwon - totals.indexed_mae_manwon
+        totals.drop(columns=["base_sum", "indexed_sum"]).to_csv(
+            prefix.parent / f"{prefix.name}-price-{label}.csv")
+        if label == "overall":
+            print(totals.to_string())
     write_reference(
         reference, prefix.parent / f"{prefix.name}-seoul-reference.json"
     )

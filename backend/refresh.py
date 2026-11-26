@@ -797,6 +797,7 @@ def publish(db, anchor, macro_path, district):
     with db.cursor() as cur:
         cur.executemany("UPDATE area_groups SET representative_area=%s WHERE complex_id=%s AND area_group=%s",
                         inputs[["representative_area","complex_id","area_group"]].itertuples(index=False,name=None))
+        cur.execute("ALTER TABLE model_inputs ADD COLUMN IF NOT EXISTS indexed_log_current double precision")
         columns = inputs.drop(columns="representative_area")
         clean = columns.astype(object).where(columns.notna(), None)
         cur.execute("DELETE FROM model_inputs WHERE month=%s AND split_part(complex_id,' ',2)=%s", (str(anchor),DISTRICTS[district]))
