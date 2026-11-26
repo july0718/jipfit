@@ -25,6 +25,8 @@ def read_trades(db, code, district, cutoff):
         FROM trades t JOIN complexes c USING (complex_id)
         WHERE split_part(t.complex_id, ' ', 2) = %s AND NOT t.is_cancelled
           AND t.contract_date >= %s AND t.contract_date < %s
+          AND NOT EXISTS (SELECT 1 FROM complex_training_exclusions x
+                          WHERE x.complex_id = t.complex_id AND t.contract_date >= x.exclude_from)
         """, (district, TRADE_START.start_time.date(), (cutoff - 1).start_time.date()))
     rows = pd.DataFrame(cursor.fetchall(), columns=[column.name for column in cursor.description])
     dates = pd.to_datetime(rows.contract_date)

@@ -1,6 +1,23 @@
 const homesCache = new Map();
 let catalogPromise;
 let liveHomesPromise;
+const cacheLifetime = 5 * 60 * 1000;
+let expiresAt = 0;
+
+function expireCachedHomes() {
+  if (Date.now() < expiresAt) return;
+  homesCache.clear();
+  liveHomesPromise = undefined;
+  catalogPromise = undefined;
+  expiresAt = Date.now() + cacheLifetime;
+}
+
+export function invalidateHomesCache() {
+  homesCache.clear();
+  liveHomesPromise = undefined;
+  catalogPromise = undefined;
+  expiresAt = 0;
+}
 
 async function readJSON(url, options) {
   const response = await fetch(url, {cache: "no-store", ...options});
@@ -43,7 +60,31 @@ function getCatalog() {
 }
 
 export async function readDistricts() {
+  expireCachedHomes();
   return (await getCatalog()).districts;
+}
+
+export function mergeHomeRow(staticItem, liveRow) {
+  if (!staticItem) return {...liveRow};
+  const addressChanged = Boolean(
+    liveRow.address && staticItem.address && liveRow.address !== staticItem.address
+  );
+  const hasLiveCoords = "latitude" in liveRow || "longitude" in liveRow;
+  const livePairValid = hasLiveCoords && liveRow.latitude != null && liveRow.longitude != null;
+  const merged = {...staticItem, ...liveRow};
+  if (hasLiveCoords) {
+    merged.latitude = livePairValid ? liveRow.latitude : null;
+    merged.longitude = livePairValid ? liveRow.longitude : null;
+  } else if (addressChanged) {
+    merged.latitude = null;
+    merged.longitude = null;
+  }
+  if (typeof liveRow.demolition_confirmed === "boolean") {
+    merged.demolition_confirmed = liveRow.demolition_confirmed;
+  } else if (typeof staticItem.demolition_confirmed === "boolean") {
+    merged.demolition_confirmed = staticItem.demolition_confirmed;
+  }
+  return merged;
 }
 
 async function hybridDistrict(name, code) {
@@ -54,10 +95,10 @@ async function hybridDistrict(name, code) {
   if (!Array.isArray(metadata)) return full();
   const byId = new Map(metadata.map(item => [item.complex_id, item]));
   const rows = await readJSON("/api/complexes?" + query + "&live_only=true");
-  // New complexes can be traded before the next monthly metadata export.
-  const missing = rows.some(row => !byId.has(row.complex_id) && !row.address);
+  // Live responses now include address and built; fall back to full() only for older API servers.
+  const missing = rows.some(row => !byId.has(row.complex_id) && (!row.address || row.built === undefined));
   const source = missing ? await full() : rows;
-  return source.map(row => ({...byId.get(row.complex_id), ...row}));
+  return source.map(row => mergeHomeRow(byId.get(row.complex_id), row));
 }
 
 function districtHomes(name, code) {
@@ -73,6 +114,7 @@ function districtHomes(name, code) {
 export async function readHomes(names, signal) {
   signal?.throwIfAborted();
   if (!names.length) return [];
+  expireCachedHomes();
   const {scoped, districts} = await getCatalog();
   signal?.throwIfAborted();
   const scope = new Set(names);

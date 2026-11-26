@@ -7,5 +7,6 @@ CREATE TABLE IF NOT EXISTS trade_revisions (
     floor integer,
     price_manwon numeric NOT NULL,
     is_cancelled boolean NOT NULL,
+    reason text NOT NULL DEFAULT 'unspecified',
     superseded_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );

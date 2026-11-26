@@ -1,7 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "./_worker.js";
-import { clusterMarkers, districtNames, districtCenter } from "./mapData.js";
+import {
+  clusterMarkers,
+  districtNames,
+  districtCenter,
+  eligibleForMap,
+  hasValidCoordinates,
+  isDemolitionConfirmed,
+  isMapPositioned,
+  positionedComplexes,
+  pricedGroup,
+} from "./mapData.js";
+import { mergeHomeRow } from "./staticData.js";
 
 const districts = [
   {code: "11215", name: "광진구", bounds: [37.52, 127.06, 37.58, 127.12]},
@@ -132,4 +143,180 @@ test("fresh DB coordinates replace the monthly copy and newly listed complexes l
   assert.equal(newHome.longitude, 127.08);
   assert.equal(newHome.marker_price_manwon, 100000);
   assert.ok(seen.some(url => url.startsWith("/api/complexes?") && !url.includes("live_only")));
+});
+
+test("invalidateHomesCache forces a fresh fetch even before the 5-minute TTL expires", async t => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async url => {
+    if (url === "/api/districts") return reflect(districts);
+    if (url.startsWith("/metadata/")) return reflect([{...row("광진구"), built: 2000}]);
+    calls += 1;
+    return reflect([{...row("광진구"), marker_price_manwon: 100000 + calls}]);
+  });
+  const {readHomes, invalidateHomesCache} = await fresh("invalidate");
+  const first = await readHomes(["광진구"]);
+  const cached = await readHomes(["광진구"]);
+  assert.equal(calls, 1);
+  assert.deepEqual(cached, first);
+  invalidateHomesCache();
+  const refreshed = await readHomes(["광진구"]);
+  assert.equal(calls, 2);
+  assert.equal(refreshed[0].marker_price_manwon, 100002);
+});
+
+test("Pages worker forwards /api/metadata-revision to the API origin", async t => {
+  t.mock.method(globalThis, "fetch", async url => {
+    assert.equal(url.toString(), "https://api.example.com/api/metadata-revision");
+    return reflect({revision: "0123456789abcdef0123456789abcdef"});
+  });
+  const response = await worker.fetch(new Request("https://jipfit.example/api/metadata-revision"), {
+    API_ORIGIN: "https://api.example.com",
+  });
+  assert.deepEqual(await response.json(), {revision: "0123456789abcdef0123456789abcdef"});
+});
+
+test("fresh live address and coordinates override stale monthly metadata without redundant full fetch", async t => {
+  const existing = row("광진구");
+  const added = {
+    ...existing,
+    complex_id: existing.complex_id + " 신규",
+    address: "서울특별시 광진구 구의동 99",
+    built: 2024,
+    latitude: 37.56,
+    longitude: 127.08,
+  };
+  const seen = [];
+  t.mock.method(globalThis, "fetch", async url => {
+    seen.push(url);
+    if (url === "/api/districts") return reflect(districts);
+    if (url.startsWith("/metadata/")) {
+      return reflect([{
+        ...existing,
+        address: "서울특별시 광진구 구의동 1",
+        built: 1995,
+        latitude: 37.50,
+        longitude: 127.00,
+        facilities: {households: 500},
+      }]);
+    }
+    return reflect([
+      {...existing, address: "서울특별시 광진구 구의동 2", built: 1997, latitude: 37.55, longitude: 127.07},
+      added,
+    ]);
+  });
+  const {readHomes} = await fresh("live-address-consistent");
+  const [updated, newlyAdded] = await readHomes(["광진구"]);
+  assert.equal(updated.address, "서울특별시 광진구 구의동 2");
+  assert.equal(updated.built, 1997);
+  assert.equal(updated.latitude, 37.55);
+  assert.equal(updated.longitude, 127.07);
+  assert.deepEqual(updated.facilities, {households: 500});
+  assert.equal(newlyAdded.address, "서울특별시 광진구 구의동 99");
+  assert.equal(newlyAdded.built, 2024);
+  assert.ok(!seen.some(url => url.startsWith("/api/complexes?") && !url.includes("live_only")));
+});
+
+test("common map positioning excludes confirmed demolished or unpositioned complexes across markers and clusters", () => {
+  const presentComplex = {
+    complex_id: "서울특별시 광진구 구의동|631-1|현대프라임",
+    name: "현대프라임",
+    latitude: 37.5374,
+    longitude: 127.0976,
+    trade_count: 15,
+    demolition_confirmed: false,
+    groups: [{area_group: 85, predictable: true, marker_price_manwon: 169000, demolition_confirmed: false}],
+  };
+  const demolishedComplex = {
+    ...presentComplex,
+    complex_id: "서울특별시 광진구 구의동|100|멸실확정단지",
+    name: "멸실확정단지",
+    demolition_confirmed: true,
+    groups: [{area_group: 85, predictable: true, marker_price_manwon: 150000, demolition_confirmed: true}],
+  };
+  const pendingComplex = {
+    ...presentComplex,
+    complex_id: "서울특별시 광진구 구의동|200|판정보류단지",
+    name: "판정보류단지",
+    demolition_confirmed: false,
+    groups: [{area_group: 85, predictable: false, marker_price_manwon: 130000, demolition_confirmed: false}],
+  };
+  const nullCoordComplex = {
+    ...presentComplex,
+    complex_id: "서울특별시 광진구 구의동|300|주소정정대기단지",
+    name: "주소정정대기단지",
+    latitude: null,
+    longitude: null,
+  };
+
+  assert.equal(isDemolitionConfirmed(presentComplex), false);
+  assert.equal(isDemolitionConfirmed(demolishedComplex), true);
+  assert.equal(hasValidCoordinates(presentComplex), true);
+  assert.equal(hasValidCoordinates(nullCoordComplex), false);
+  assert.equal(eligibleForMap(presentComplex), true);
+  assert.equal(eligibleForMap(pendingComplex), true);
+  assert.equal(eligibleForMap(demolishedComplex), false);
+  assert.equal(isMapPositioned(demolishedComplex), false);
+  assert.equal(isMapPositioned(nullCoordComplex), false);
+
+  const positioned = positionedComplexes([
+    presentComplex,
+    demolishedComplex,
+    pendingComplex,
+    nullCoordComplex,
+  ]);
+  assert.deepEqual(
+    positioned.map(c => c.complex_id),
+    [presentComplex.complex_id, pendingComplex.complex_id]
+  );
+
+  // Even when the demolished complex is selectedId, clusterMarkers(positioned, ...) never includes it.
+  const clustered = clusterMarkers(positioned, 11, demolishedComplex.complex_id);
+  assert.equal(clustered.some(pin => pin.complex_id === demolishedComplex.complex_id), false);
+});
+
+test("live NULL coordinates and demolition_confirmed override stale static JSON metadata", async t => {
+  const addrCleared = {
+    complex_id: "서울특별시 광진구 구의동|631-1|주소변경",
+    area_group: 85,
+  };
+  const demolished = {
+    complex_id: "서울특별시 광진구 구의동|100|멸실단지",
+    area_group: 85,
+  };
+
+  // Direct unit check on mergeHomeRow
+  const mergedCleared = mergeHomeRow(
+    {...addrCleared, address: "서울특별시 광진구 구의동 631-1", latitude: 37.53, longitude: 127.09, demolition_confirmed: false},
+    {...addrCleared, address: "서울특별시 광진구 구의동 631-2", latitude: null, longitude: null, demolition_confirmed: false},
+  );
+  assert.equal(mergedCleared.latitude, null);
+  assert.equal(mergedCleared.longitude, null);
+
+  const mergedDemolished = mergeHomeRow(
+    {...demolished, address: "서울특별시 광진구 구의동 100", latitude: 37.54, longitude: 127.08},
+    {...demolished, address: "서울특별시 광진구 구의동 100", latitude: 37.54, longitude: 127.08, demolition_confirmed: true},
+  );
+  assert.equal(mergedDemolished.demolition_confirmed, true);
+
+  t.mock.method(globalThis, "fetch", async url => {
+    if (url === "/api/districts") return reflect(districts);
+    if (url.startsWith("/metadata/")) {
+      return reflect([
+        {...addrCleared, address: "서울특별시 광진구 구의동 631-1", built: 1997, latitude: 37.53, longitude: 127.09},
+        {...demolished, address: "서울특별시 광진구 구의동 100", built: 1988, latitude: 37.54, longitude: 127.08, demolition_confirmed: false},
+      ]);
+    }
+    return reflect([
+      {...addrCleared, address: "서울특별시 광진구 구의동 631-2", built: 1997, latitude: null, longitude: null, marker_price_manwon: 150000, trade_count: 10, demolition_confirmed: false},
+      {...demolished, address: "서울특별시 광진구 구의동 100", built: 1988, latitude: 37.54, longitude: 127.08, marker_price_manwon: 140000, trade_count: 8, demolition_confirmed: true},
+    ]);
+  });
+
+  const {readHomes} = await fresh("stale-static-override");
+  const rows = await readHomes(["광진구"]);
+  const complexes = rows.map(r => ({...r, groups: [r]}));
+  assert.equal(rows[0].latitude, null);
+  assert.equal(rows[0].longitude, null);
+  assert.equal(rows[1].demolition_confirmed, true);
+  assert.deepEqual(positionedComplexes(complexes), []);
 });

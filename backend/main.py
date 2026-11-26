@@ -20,6 +20,7 @@ async def lifespan(app):
         db.execute("SELECT pg_advisory_xact_lock(1121506)")
         db.execute((Path(__file__).parent / "db/trade_status.sql").read_text(encoding="utf-8"))
         db.execute((Path(__file__).parent / "db/regions.sql").read_text(encoding="utf-8"))
+        db.execute((Path(__file__).parent / "db/trade_revisions.sql").read_text(encoding="utf-8"))
         db.execute((Path(__file__).parent / "db/metadata_refresh.sql").read_text(encoding="utf-8"))
         db.execute((Path(__file__).parent / "db/user_accounts.sql").read_text(encoding="utf-8"))
     app.state.model = load_model()
@@ -60,6 +61,38 @@ def list_districts():
             for code, name in DISTRICTS.items()]
 
 
+@app.get("/api/metadata-revision")
+def metadata_revision():
+    # A digest of complex metadata (including new registrations, geocoded coordinates,
+    # and confirmed lifecycle demolition state) combined with verified metadata evidence.
+    with connect() as db:
+        return db.execute("""
+            SELECT md5(
+                coalesce((
+                    SELECT md5(string_agg(
+                        md5(jsonb_build_array(
+                            c.complex_id, c.name, c.address, c.built, c.latitude, c.longitude,
+                            COALESCE(ls.existence = 'demolished', FALSE)
+                        )::text),
+                        '' ORDER BY c.complex_id
+                    )) FROM complexes c LEFT JOIN complex_lifecycle_state ls USING (complex_id)
+                ), '') || ':' ||
+                coalesce((
+                    SELECT md5(string_agg(
+                        md5(jsonb_build_array(batch, complex_id, evidence, changes)::text),
+                        '' ORDER BY batch, complex_id
+                    )) FROM complex_metadata_evidence
+                ), '') || ':' ||
+                coalesce((
+                    SELECT md5(string_agg(
+                        md5(jsonb_build_array(complex_id, existence, result_key, as_of)::text),
+                        '' ORDER BY complex_id
+                    )) FROM complex_lifecycle_state WHERE existence IS NOT NULL
+                ), '')
+            ) AS revision
+        """).fetchone()
+
+
 @app.get("/api/complexes")
 def list_complexes(include_sort: bool = False, district: str | None = None, live_only: bool = False):
     if district is not None and district not in DISTRICTS.values():
@@ -67,36 +100,6 @@ def list_complexes(include_sort: bool = False, district: str | None = None, live
     with connect() as db:
         return load_home_rows(db, district=district, include_sort=include_sort,
                               live_only=live_only, model=app.state.model)
-        stats = {r["complex_id"]: r for r in db.execute("""
-            SELECT complex_id, count(*) AS trade_count, max(contract_date) AS last_trade
-            FROM trades
-            WHERE NOT is_cancelled AND (%s::text IS NULL OR split_part(complex_id, ' ', 2) = %s)
-            GROUP BY complex_id
-        """, scope)}
-        last_prices = {(r["complex_id"], r["area_group"]): r["price_manwon"] for r in db.execute("""
-            SELECT DISTINCT ON (complex_id, area_group) complex_id, area_group, price_manwon
-            FROM trades
-            WHERE NOT is_cancelled AND (%s::text IS NULL OR split_part(complex_id, ' ', 2) = %s)
-            ORDER BY complex_id, area_group, contract_date DESC, trade_id DESC
-        """, scope)}
-        inputs = db.execute("""
-            SELECT DISTINCT ON (complex_id) m.* FROM model_inputs m
-            JOIN district_input_months d ON d.district=split_part(m.complex_id,' ',2) AND m.month=d.month
-            WHERE (%s::text IS NULL OR d.district = %s)
-            ORDER BY complex_id, area_group
-        """, scope).fetchall()
-    returns = {}
-    if inputs:
-        for row, rates in zip(inputs, predict_growth(app.state.model, inputs), strict=True):
-            returns[row["complex_id"]] = dict(zip(HORIZONS, (100 * expm1(r) for r in rates), strict=True))
-    for row in rows:
-        cid = row["complex_id"]
-        key = cid, row["area_group"]
-        row["marker_price_manwon"] = last_prices.get(key)
-        stat = stats.get(cid, {})
-        row.update(trade_count=stat.get("trade_count", 0), last_trade=stat.get("last_trade"),
-                   sort_returns=returns.get(cid, {}))
-    return rows
 
 
 @app.get("/api/complex")

@@ -1,5 +1,5 @@
 import os
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
@@ -20,6 +20,15 @@ class MolitResponseError(ValueError):
     """API-wide rejection, safe to report without the request URL."""
 
 
+class TradeCounts(Counter):
+    """Counter of collapsed trade tuples that also preserves pre-collapsed row buildYear counts."""
+
+    def __init__(self, *args, by_built=None, build_years=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.by_built = Counter(by_built or {})
+        self.build_years = {k: Counter(v) for k, v in (build_years or {}).items()}
+
+
 def fetch_month(month, district=GWANGJIN):
     key = os.environ.get("MOLIT_SERVICE_KEY")
     if not key:
@@ -29,8 +38,10 @@ def fetch_month(month, district=GWANGJIN):
     page = 1
     seen = 0
     expected = None
-    trades = Counter()
-    complexes = {}
+    trades = TradeCounts()
+    trades_by_built = Counter()
+    complex_meta = {}
+    build_years = defaultdict(Counter)
     while True:
         query = urlencode(dict(serviceKey=key, LAWD_CD=district, DEAL_YMD=month,
                                pageNo=page, numOfRows=1000))
@@ -63,15 +74,31 @@ def fetch_month(month, district=GWANGJIN):
                         f"Invalid trade values: district={district}, month={month}, "
                         f"apt={name}, day={day}, area={area}, price={price}, built={built}"
                     )
-                complexes[cid] = (cid, name, address+" "+lot, built)
+                complex_meta[cid] = (name, address + " " + lot)
+                build_years[cid][built] += 1
                 group = int(round(area / 5)) * 5
                 floor = int(row["floor"]) if row.get("floor") else None
             except (KeyError, ValueError, InvalidOperation) as exc:
                 raise TradeDataError(f"page={page} row={number} apt={row.get('aptNm')!r} "
                                      f"({type(exc).__name__}: {exc})") from None
             trades[(cid, group, day, area, floor, price, cancelled)] += 1
+            trades_by_built[(cid, group, day, area, floor, price, cancelled, built)] += 1
         seen += len(items)
         if seen == total:
+            complexes = {}
+            for cid, (name, full_address) in complex_meta.items():
+                years = build_years[cid]
+                chosen_built = min(years.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+                if len(years) > 1:
+                    summary = ", ".join(f"{y}:{c}" for y, c in sorted(years.items()))
+                    print(
+                        f"MOLIT buildYear conflict: district={district} month={month} "
+                        f"cid={cid} ({summary}) -> {chosen_built}",
+                        flush=True,
+                    )
+                complexes[cid] = (cid, name, full_address, chosen_built)
+            trades.by_built = trades_by_built
+            trades.build_years = {cid: Counter(years) for cid, years in build_years.items()}
             return complexes, trades
         if not items:
             raise MolitResponseError(f"Incomplete MOLIT response: page={page}, seen={seen}, total={total}")

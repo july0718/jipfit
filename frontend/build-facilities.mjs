@@ -72,6 +72,12 @@ export async function build(input, output) {
     await writeFile(path.join(output,file),JSON.stringify(rows));
   }
   if (!total || !matched || !located) throw Error("시설 자료 연결 결과를 확인하세요.");
+  try {
+    const revision = await readFile(path.join(input, "verified-revision.txt"), "utf8");
+    await writeFile(path.join(output, "verified-revision.txt"), revision);
+  } catch (err) {
+    if (err?.code !== "ENOENT") throw err;
+  }
   console.log({total,matched,located});
 }
 

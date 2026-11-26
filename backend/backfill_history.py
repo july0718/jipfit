@@ -8,7 +8,7 @@ from districts import DISTRICTS, GWANGJIN
 from urllib.error import HTTPError
 
 from molit import MolitResponseError, TradeDataError, fetch_month
-from refresh import reconcile
+from refresh import ensure_schema, reconcile
 
 
 MONTHS = pd.period_range("2006-01", "2025-03", freq="M")
@@ -16,6 +16,7 @@ TARGETS = [code for code in DISTRICTS if code != GWANGJIN]
 
 
 def backfill(codes):
+    ensure_schema()  # reconcile reads complex_exclusions.
     missing = []
     with psycopg.connect(autocommit=True, connect_timeout=8) as db:
         db.execute("""CREATE TABLE IF NOT EXISTS trade_history_imports (
@@ -52,11 +53,13 @@ def backfill(codes):
                                        (code, first)).fetchone()
                     if saved:
                         continue
-                    added, _ = reconcile(db, month, complexes, rows, code, history=True)
+                    result = reconcile(db, month, complexes, rows, code, history=True)
+                    added = result.added
                     actual = db.execute("""SELECT count(*) FROM trades WHERE split_part(complex_id,' ',2)=%s
                         AND contract_date >= %s AND contract_date < %s""",
                         (DISTRICTS[code], first, (month+1).start_time.date())).fetchone()[0]
-                    if actual != total:
+                    # Rows of removed complexes are deliberately not stored.
+                    if actual != total - result.excluded:
                         raise ValueError(f"{code} {month}: API={total}, DB={actual}; month rolled back")
                     db.execute("INSERT INTO trade_history_imports(district, month, api_rows) VALUES (%s,%s,%s)",
                                (code, first, total))

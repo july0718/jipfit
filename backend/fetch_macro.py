@@ -75,7 +75,14 @@ def extract_rates(content):
 from districts import DISTRICTS, GWANGJIN
 
 
-def extract_index(workbook_bytes, district):
+def select_monthly_post(rows):
+    monthly = [row for row in rows if row.get('listSubCd') == 'STATDATA03']
+    if not monthly:
+        raise ValueError('Could not identify the official monthly house-price download post.')
+    return max(monthly, key=lambda row: (str(row.get('userDttm') or ''), int(row.get('seq') or 0)))
+
+
+def extract_all_seoul_indexes(workbook_bytes):
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', UserWarning)
         workbook = openpyxl.load_workbook(io.BytesIO(workbook_bytes), read_only=True, data_only=True)
@@ -84,22 +91,66 @@ def extract_index(workbook_bytes, district):
     sheet.reset_dimensions()
     rows = list(sheet.iter_rows(values_only=True))
     header = next(row for row in rows if any(re.fullmatch(r'\d{4}년\s*\d{1,2}월', str(c or '')) for c in row))
-    candidates = [row for row in rows if len(row) > 4 and row[0] == '서울' and row[3] == DISTRICTS[district]]
-    if len(candidates) != 1:
-        raise ValueError(f'Expected one Gwangjin raw apartment-index row, found {len(candidates)}.')
-    target = candidates[0]
-    values = {}
+    month_cols = []
     for position, label in enumerate(header):
         match = re.fullmatch(r'(\d{4})년\s*(\d{1,2})월', str(label or ''))
-        if not match:
-            continue
-        value = target[position] if position < len(target) else None
-        if not isinstance(value, (int, float)) or value <= 0:
-            raise ValueError(f'Missing/nonpositive official Gwangjin index for {label}.')
-        values[(int(match[1]), int(match[2]))] = float(value)
-    if len(values) < 120:
-        raise ValueError('Insufficient Gwangjin index history.')
-    return values, sheet.title
+        if match:
+            month_cols.append((position, f'{int(match[1]):04}-{int(match[2]):02}', label))
+    by_name = {}
+    for row in rows:
+        if len(row) > 4 and row[0] == '서울' and row[3]:
+            by_name.setdefault(row[3], []).append(row)
+    result = {}
+    for code, name in DISTRICTS.items():
+        candidates = by_name.get(name, [])
+        if len(candidates) != 1:
+            raise ValueError(f'Expected one {name} raw apartment-index row, found {len(candidates)}.')
+        target = candidates[0]
+        values = {}
+        for position, ym, label in month_cols:
+            value = target[position] if position < len(target) else None
+            if not isinstance(value, (int, float)) or value <= 0:
+                raise ValueError(f'Missing/nonpositive official {name} index for {label}.')
+            values[ym] = float(value)
+        if len(values) < 120:
+            raise ValueError(f'Insufficient {name} index history.')
+        result[code] = values
+    return result, sheet.title
+
+
+def extract_index(workbook_bytes, district):
+    all_indexes, sheet_title = extract_all_seoul_indexes(workbook_bytes)
+    values = {
+        tuple(map(int, ym.split('-'))): value
+        for ym, value in all_indexes[district].items()
+    }
+    return values, sheet_title
+
+
+def load_cached_index(workbook_bytes, district):
+    digest = hashlib.sha256(workbook_bytes).hexdigest()
+    cache_path = ROOT / 'reb_seoul_indexes.json'
+    if cache_path.exists():
+        try:
+            cached = json.loads(cache_path.read_text(encoding='utf-8'))
+            if cached.get('sha256') == digest and district in cached.get('districts', {}):
+                values = {
+                    tuple(map(int, ym.split('-'))): value
+                    for ym, value in cached['districts'][district].items()
+                }
+                return values, cached['sheet']
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    all_indexes, sheet_title = extract_all_seoul_indexes(workbook_bytes)
+    cache_path.write_text(
+        json.dumps({'sha256': digest, 'sheet': sheet_title, 'districts': all_indexes}, ensure_ascii=False),
+        encoding='utf-8',
+    )
+    values = {
+        tuple(map(int, ym.split('-'))): value
+        for ym, value in all_indexes[district].items()
+    }
+    return values, sheet_title
 
 
 def main():
@@ -114,10 +165,7 @@ def main():
 
     board_query = urllib.parse.urlencode({'page': 1, 'rows': 20, 'bbsCd': 'STATDATA', 'grpCd': 'B1006', 'searchType': '', 'searchWord': ''})
     board = json.loads(download(REB_BOARD_URL + '?' + board_query, 'rone_board.json', args.refresh))
-    monthly = [row for row in board['data'] if row.get('listSubCd') == 'STATDATA03']
-    if len(monthly) != 1:
-        raise ValueError('Could not identify the official monthly house-price download post.')
-    post = monthly[0]
+    post = select_monthly_post(board['data'])
     query = urllib.parse.urlencode({'bbsCd': post['bbsCd'], 'seq': post['seq'], 'noticeYn': post['noticeYn']})
     metadata = json.loads(download(REB_META_URL + '?' + query, 'rone_monthly_metadata.json', args.refresh))['data']
     files = [f for f in metadata['files'] if f['fileExt'].lower() == 'zip']
@@ -126,7 +174,7 @@ def main():
     file = files[0]
     download_query = urllib.parse.urlencode({'bbsCd': file['bbsCd'], 'seq': file['seq'], 'fileSeq': file['fileSeq']})
     zip_url = REB_DOWNLOAD_URL + '?' + download_query
-    zip_bytes = download(zip_url, 'reb_monthly_202609.zip', args.refresh)
+    zip_bytes = download(zip_url, 'reb_monthly_latest.zip', args.refresh)
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
         paths = [n for n in archive.namelist() if n.endswith('/(월) 매매가격지수_아파트.xlsx')]
         if len(paths) != 1:
@@ -134,7 +182,7 @@ def main():
         member = paths[0]
         workbook_bytes = archive.read(member)
     (ROOT / 'reb_apartment_index.xlsx').write_bytes(workbook_bytes)
-    indexes, sheet_name = extract_index(workbook_bytes, args.district)
+    indexes, sheet_name = load_cached_index(workbook_bytes, args.district)
 
     with (ROOT / 'policy_rate_events.csv').open('w', encoding='utf-8-sig', newline='') as handle:
         writer = csv.writer(handle)
@@ -199,7 +247,7 @@ def main():
         },
         'macro_rows': len(rows),
         'output_end_month': args.end_month,
-        'original_hashes_sha256': {n: hashlib.sha256((ROOT/n).read_bytes()).hexdigest() for n in ['bok_base_rate.html', 'rone_board.json', 'rone_monthly_metadata.json', 'reb_monthly_202609.zip', 'reb_apartment_index.xlsx']},
+        'original_hashes_sha256': {n: hashlib.sha256((ROOT/n).read_bytes()).hexdigest() for n in ['bok_base_rate.html', 'rone_board.json', 'rone_monthly_metadata.json', 'reb_monthly_latest.zip', 'reb_apartment_index.xlsx']},
     }
     (ROOT / 'source_metadata.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps({'rows': len(rows), 'index_observations': len(indexes), 'index_start': manifest['gwangjin_apt_index']['start_month'], 'index_end': manifest['gwangjin_apt_index']['end_month'], 'latest_rows': rows[-3:]}, ensure_ascii=False, indent=2))

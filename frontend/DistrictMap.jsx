@@ -1,13 +1,23 @@
 import React, { useEffect, useRef, useState } from "react";
-import { clusterMarkers, districtCenter } from "./mapData";
-const pricedGroup = complex => complex.groups?.find(group =>
-  group.predictable && Number.isFinite(Number(group.marker_price_manwon)) &&
-  Number(group.marker_price_manwon) > 0) || complex.groups?.find(group =>
-  group.marker_price_manwon != null &&
-  Number.isFinite(Number(group.marker_price_manwon)) &&
-  Number(group.marker_price_manwon) > 0);
-const eligibleForMap = complex =>
-  Number(complex.trade_count) > 0 && Boolean(pricedGroup(complex));
+import {
+  clusterMarkers,
+  districtCenter,
+  eligibleForMap,
+  hasValidCoordinates,
+  isDemolitionConfirmed,
+  isMapPositioned,
+  positionedComplexes,
+  pricedGroup,
+} from "./mapData";
+
+export {
+  eligibleForMap,
+  hasValidCoordinates,
+  isDemolitionConfirmed,
+  isMapPositioned,
+  positionedComplexes,
+  pricedGroup,
+};
 
 let sdk;
 export function loadMaps() {
@@ -85,8 +95,7 @@ function DistrictMap({ district, districtBounds, allComplexes, complexes, onSele
   const container = useRef(null);
   const instance = useRef(null);
   const redraw = useRef(null);
-  const positioned = React.useMemo(() => complexes.filter(c =>
-    eligibleForMap(c) && c.latitude != null && c.longitude != null), [complexes]);
+  const positioned = React.useMemo(() => positionedComplexes(complexes), [complexes]);
   const props = useRef(null);
   props.current = {positioned, selectedId, limit, onSelect, onViewport};
   const [maps, setMaps] = useState(null);
