@@ -44,7 +44,7 @@ jobs:
         env:
           PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
         run: |
-          origin="https://${PAGES_PROJECT}.pages.dev"
+          origin="https://jipfit-48v.pages.dev"
           if [[ "${{ github.event.schedule }}" == "45 22 * * *" ]]; then
             revision=$(curl -fsS --retry 2 "$origin/api/metadata-revision" | jq -er '.revision | select(test("^[0-9a-f]{32}$"))')
             previous=$(curl -fsS "$origin/metadata/verified-revision.txt" || true)
