@@ -65,7 +65,9 @@ services:
       KAPT_SERVICE_KEY: ${KAPT_SERVICE_KEY:-}
       NAVER_MAPS_API_KEY_ID: ${NAVER_MAPS_API_KEY_ID:-}
       NAVER_MAPS_API_KEY: ${NAVER_MAPS_API_KEY:-}
+      JIPFIT_LIFECYCLE_DIR: /lifecycle
     volumes:
       - ./verified-metadata:/metadata:ro
+      - ./lifecycle-inbox:/lifecycle:ro
 volumes:
   jipfit_pg:

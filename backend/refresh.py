@@ -20,6 +20,7 @@ import psycopg
 from automatic_metadata import address_key, refresh_automatic_metadata
 from districts import DISTRICTS, GWANGJIN
 from features import build_inputs, input_month_range, is_in_input_window
+from lifecycle_inbox import apply_inbox
 from lifecycle_results import empty_lifecycle_provider
 from molit import fetch_month
 from refresh_metadata import apply_metadata, apply_verified_complex_records, validate as validate_metadata
@@ -1368,6 +1369,18 @@ def refresh_many(districts, *, now=None):
     return failed
 
 
+def apply_lifecycle_inbox(today):
+    """Apply published lifecycle bundles when JIPFIT_LIFECYCLE_DIR is set; failures join the daily retry."""
+    root = os.environ.get("JIPFIT_LIFECYCLE_DIR")
+    if not root:
+        return []
+    try:
+        return [f"lifecycle:{batch}" for batch in apply_inbox(root, today)]
+    except Exception as exc:
+        print(f"Lifecycle inbox deferred ({type(exc).__name__}).", flush=True)
+        return [f"lifecycle-inbox:{type(exc).__name__}"]
+
+
 def seconds_until_refresh(now=None):
     now = now or datetime.now(KST)
     next_run = datetime.combine(now.date(), time(6), KST)
@@ -1790,6 +1803,7 @@ def run_once(districts=None, *, metadata_dir=None, now=None, lifecycle_provider=
             apply_metadata(metadata_dir, slot_day)
         except Exception as exc:
             metadata_failed.append(f"verified-metadata ({type(exc).__name__})")
+    metadata_failed.extend(apply_lifecycle_inbox(slot_day))
 
     errors = []
     if failed:
@@ -1838,6 +1852,7 @@ def main():
                     apply_metadata(args.metadata_dir, slot_day, daily_only=True)
                 except Exception as exc:
                     failed.append(f"verified-metadata:{type(exc).__name__}")
+            failed.extend(apply_lifecycle_inbox(slot_day))
             return failed
 
         while True:

@@ -2586,6 +2586,7 @@ class SqlPlaceholderTest(unittest.TestCase):
         "train_seoul.py",
         "features.py",
         "fetch_macro.py",
+        "lifecycle_inbox.py",
         "lifecycle_results.py",
         "main.py",
         "refresh.py",

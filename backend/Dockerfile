@@ -3,7 +3,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 ENV OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2
-COPY indexed_reference.py backfill_history.py import_coordinates.py districts.py refresh.py automatic_metadata.py lifecycle_results.py molit.py features.py fetch_macro.py macro_features.py ./
+COPY indexed_reference.py backfill_history.py import_coordinates.py districts.py refresh.py automatic_metadata.py lifecycle_results.py lifecycle_inbox.py molit.py features.py fetch_macro.py macro_features.py ./
 COPY apply_lifecycle_baseline.py delete_complexes.py ./
 COPY db/user_accounts.sql db/trade_status.sql db/regions.sql db/metadata_refresh.sql db/trade_revisions.sql db/
 COPY accounts.py account_api.py database.py complex_list.py main.py inference.py reference_band.py seoul_reference.py joint_model.py joint_model.joblib export_public_json.py check_public_json.py benchmark_web.py refresh_metadata.py ./

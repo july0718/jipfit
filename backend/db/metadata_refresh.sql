@@ -216,6 +216,15 @@ ALTER TABLE complex_lifecycle_quarantine ALTER COLUMN payload_digest SET NOT NUL
 CREATE UNIQUE INDEX IF NOT EXISTS complex_lifecycle_quarantine_digest_idx
 ON complex_lifecycle_quarantine (payload_digest);
 
+-- Monthly judgment bundles taken from the lifecycle inbox; a recorded batch is never applied again.
+CREATE TABLE IF NOT EXISTS complex_lifecycle_batches (
+    batch text PRIMARY KEY,
+    checksum text NOT NULL,
+    status text NOT NULL CHECK (status IN ('applied', 'rejected')),
+    summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+    recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
 -- Contracts on or after exclude_from stay in trades but are left out of model training and forecast inputs.
 CREATE TABLE IF NOT EXISTS complex_training_exclusions (
     complex_id text PRIMARY KEY REFERENCES complexes(complex_id),

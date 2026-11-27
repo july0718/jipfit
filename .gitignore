@@ -11,6 +11,9 @@ frontend/public/data/
 # Local verified metadata and evidence batches
 /verified-metadata/
 
+# Monthly existence judgment bundles published by jipfit_lifecycle
+/lifecycle-inbox/
+
 # Raw, per-complex holdout results must stay local. Publish only aggregated JSON.
 /backend/holdout-output/
 

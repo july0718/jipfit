@@ -6,6 +6,7 @@ dbname=postgres". The test creates its own database, works only inside it and dr
 from collections import Counter
 from datetime import date
 from decimal import Decimal
+from hashlib import sha256
 import importlib.util
 import json
 import os
@@ -43,7 +44,7 @@ class LifecycleDatabaseTests(unittest.TestCase):
         admin.execute(f"CREATE DATABASE {self.name} TEMPLATE template0 ENCODING 'UTF8'")
         self.addCleanup(admin.close)
         self.addCleanup(admin.execute, f"DROP DATABASE {self.name} WITH (FORCE)")
-        conninfo = f"{DSN} dbname={self.name}"
+        conninfo = self.conninfo = f"{DSN} dbname={self.name}"
         self.db = psycopg.connect(conninfo, autocommit=True)
         self.addCleanup(self.db.close)
         schema = (ROOT / "db/init.sql").read_text(encoding="utf-8").split("INSERT INTO")[0]
@@ -120,6 +121,75 @@ class LifecycleDatabaseTests(unittest.TestCase):
         self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_results WHERE complex_id=%s", (GONE,)), 2)
         self.assertEqual(self.value("SELECT count(*) FROM complex_training_exclusions"), 0)
         self.assertEqual(self.value("SELECT existence_status FROM complexes WHERE complex_id=%s", (GONE,)), "현존")
+
+    def publish_bundle(self, root, day, results):
+        batch = "monthly-" + day.replace("-", "")
+        folder = root / batch
+        folder.mkdir()
+        body = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in results).encode("utf-8")
+        (folder / "results.jsonl").write_bytes(body)
+        (folder / "manifest.json").write_text(json.dumps(
+            {"batch": batch, "as_of": day, "verifier_version": "v", "results": len(results),
+             "sha256": sha256(body).hexdigest(), "counts": {}}), encoding="utf-8")
+
+    def test_inbox_applies_monthly_bundles_and_keeps_derived_values(self):
+        import apply_lifecycle_baseline as apply
+        import lifecycle_inbox
+
+        def monthly(cid, existence, **extra):
+            return {"result_key": f"monthly-20261228:{cid}", "complex_id": cid, "existence": existence,
+                    "evidence": "basis=t; note=n", "as_of": "2026-12-28", "verifier_version": "v", **extra}
+
+        def exclusion():
+            return self.db.execute("SELECT complex_id, exclude_from FROM complex_training_exclusions").fetchall()
+
+        with patch("builtins.print"):
+            apply.run_apply(self.db, self.results(), TODAY, dry=False)
+        self.db.execute("DELETE FROM refresh_publish_pending")
+        connect = lifecycle_inbox.psycopg.connect
+        link = {"successor_id": STAYS, "successor_status": "linked"}
+        with TemporaryDirectory() as temp, patch("builtins.print"), patch.object(
+                lifecycle_inbox.psycopg, "connect", lambda **kw: connect(self.conninfo, **kw)):
+            root = Path(temp)
+            self.publish_bundle(root, "2026-12-28", [
+                # Successor links repeat the effective date and the caution date of the current judgment.
+                monthly(GONE, "demolished", evidence="basis=t; trade_caution_from=2026-05-01; note=linked", **link),
+                monthly(DATED, "demolished", effective_date="2026-07-01", effective_precision="day", **link),
+                monthly(VILLA, "pending", hold_code="범위미확인"),
+                monthly("서울특별시 구로구 구로동|9|삭제된단지", "present")])
+            (root / "monthly-20261227").mkdir()
+            self.assertEqual(lifecycle_inbox.apply_inbox(root, date(2026, 12, 29)), [])
+            self.assertEqual(lifecycle_inbox.apply_inbox(root, date(2026, 12, 29)), [])
+        batches = {row[0]: row[1:] for row in self.db.execute(
+            "SELECT batch, status, summary FROM complex_lifecycle_batches").fetchall()}
+        self.assertEqual(batches["monthly-20261227"][0], "rejected")
+        self.assertEqual(batches["monthly-20261228"], (
+            "applied", {"applied": 2, "noop": 0, "pending": 1, "quarantined": 0, "skipped": 1, "conflicts": 0}))
+        self.assertEqual(exclusion(), [(GONE, date(2026, 5, 1))])
+        self.assertEqual(self.value("SELECT effective_date FROM complex_lifecycle_state WHERE complex_id=%s",
+                                    (DATED,)), date(2026, 7, 1))
+        self.assertEqual(self.value("SELECT count(*) FROM refresh_publish_pending"), 0)
+        self.assertEqual(self.value("SELECT pending_hold_code FROM complex_lifecycle_state WHERE complex_id=%s",
+                                    (VILLA,)), "범위미확인")
+        self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_results WHERE successor_id=%s",
+                                    (STAYS,)), 2)
+        self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_quarantine"), 0)
+
+        # STAYS has a contract on 2026-06-10, after the new effective date, so the demolition is held.
+        late = {**monthly(STAYS, "demolished", effective_date="2026-06-01", effective_precision="day"),
+                "result_key": f"monthly-20261229:{STAYS}", "as_of": "2026-12-29"}
+        with TemporaryDirectory() as temp, patch("builtins.print"), patch.object(
+                lifecycle_inbox.psycopg, "connect", lambda **kw: connect(self.conninfo, **kw)):
+            self.publish_bundle(Path(temp), "2026-12-29", [late])
+            self.assertEqual(lifecycle_inbox.apply_inbox(temp, date(2026, 12, 29)), [])
+        self.assertEqual(self.db.execute(
+            "SELECT existence, pending_hold_code, pending_result_key FROM complex_lifecycle_state "
+            "WHERE complex_id=%s", (STAYS,)).fetchone(),
+            ("present", "말소후거래", f"monthly-20261229:{STAYS}:conflict"))
+        self.assertEqual(self.value("SELECT existence_status FROM complexes WHERE complex_id=%s", (STAYS,)), "현존")
+        self.assertEqual(self.value(
+            "SELECT summary->>'conflicts' FROM complex_lifecycle_batches WHERE batch='monthly-20261229'"), "1")
+        self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_quarantine"), 0)
 
     def test_delete_blocks_reregistration_and_restores_every_row(self):
         import delete_complexes as dc
