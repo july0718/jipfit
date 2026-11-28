@@ -200,7 +200,6 @@ def run_apply(db, results, today, *, dry, allow_conflicts=False):
     print(f"demolition_confirmed 단지 {hidden}곳, 마커 대상 {len(before)} -> {len(after)} ({len(after) - len(before):+d})")
     print(f"refresh_revision_pending {revisions_before} -> {pending_revisions(db)}")
     print(f"metadata-revision {revision_before} -> {metadata_revision_text(db)}")
-    print("정적 데이터는 export_public_json.py(배포 절차)를 다시 실행해야 갱신됩니다.")
     successor_report(db, results)
     return summary
 

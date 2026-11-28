@@ -249,6 +249,14 @@ class SeedTests(unittest.TestCase):
         # In PostgreSQL the first transaction() block has committed; the fake restores only the failed block.
         self.assertEqual([q for q, _ in db.log if q in ("COMMIT", "ROLLBACK")], ["COMMIT", "ROLLBACK"])
 
+    def test_a_caller_that_syncs_anyway_gets_the_seed_without_the_computation(self):
+        db = FacilityDB(complexes=[dict(HOME)])
+        with self.seed_folder(CATALOG), \
+                patch.object(facilities, "sync_complex_facilities", side_effect=AssertionError("must not compute")):
+            facilities.ensure_facilities(db, compute=False)
+        self.assertEqual(len(db.tables["facility_schools"]), 1)
+        self.assertEqual(db.tables["complex_facilities"], [])
+
     def test_the_bundled_snapshot_loads(self):
         db = FacilityDB(complexes=[dict(HOME)])
         facilities.ensure_facilities(db)
@@ -486,10 +494,14 @@ class UpdaterStepTests(unittest.TestCase):
 
     def test_the_daily_sync_runs_on_its_own_connection_and_labels_its_failure(self):
         db = FacilityDB()
+        calls = []
         with patch.object(refresh.psycopg, "connect", return_value=db), \
+             patch.object(refresh, "ensure_facilities", lambda d, **kw: calls.append(("seed", d, kw))), \
              patch.object(refresh, "sync_complex_facilities") as sync:
+            sync.side_effect = lambda d: calls.append(("sync", d))
             self.assertEqual(refresh.sync_facilities(), [])
-            sync.assert_called_once_with(db)
+            # A seed missed at start-up is retried first, without computing twice.
+            self.assertEqual(calls, [("seed", db, {"compute": False}), ("sync", db)])
             sync.side_effect = RuntimeError("x")
             self.assertEqual(refresh.sync_facilities(), ["facilities:sync"])
 

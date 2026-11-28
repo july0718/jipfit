@@ -1416,6 +1416,8 @@ def sync_facilities():
     """Recompute every complex's facilities after the day's changes; a failure joins the daily retry."""
     try:
         with psycopg.connect(connect_timeout=8) as db:
+            # A seed that failed when the updater started is loaded here; filled tables are only counted.
+            ensure_facilities(db, compute=False)
             sync_complex_facilities(db)
         return []
     except Exception as exc:

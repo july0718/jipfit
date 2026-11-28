@@ -256,11 +256,12 @@ def _seed(name):
     return json.loads((SEED / f"{name}.json").read_text(encoding="utf-8"))
 
 
-def ensure_facilities(db):
+def ensure_facilities(db, *, compute=True):
     """Load the bundled snapshot into empty catalog tables, then compute complex_facilities if it is empty.
 
-    Called when the updater starts and by the commands below. The snapshot is committed before the
-    computation, so a failed computation is repeated by the daily sync.
+    Called when the updater starts, before the daily sync, and by the commands below. The snapshot is
+    committed before the computation, so a failed computation is repeated by the daily sync. compute=False
+    leaves the computation to a caller that runs the sync anyway.
     """
     with db.transaction():
         _lock(db)
@@ -273,7 +274,7 @@ def ensure_facilities(db):
         if not _row_count(db, table):
             _insert(db, table, columns, [tuple(row) for row in _seed("school-anchors")])
         computed = _row_count(db, "complex_facilities")
-    if not computed:
+    if compute and not computed:
         sync_complex_facilities(db)
 
 
