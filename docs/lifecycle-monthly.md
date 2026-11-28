@@ -35,6 +35,8 @@ updater의 월간 작업이 매달 1일 06:00(KST)에 K-apt 갱신과 검증 메
 | `JIPFIT_LIFECYCLE_MAX_AUTO` | `20` | 한 달 자동 확정 한도. 넘으면 그 달 확정을 모두 `대량확정보류`로 둡니다 |
 | `JIPFIT_LIFECYCLE_COLLECT_MINUTES` | `90` | 한 번의 시도에서 수집에 쓰는 시간 |
 | `JIPFIT_LIFECYCLE_READ_ONCE` | `1` | 한 번의 실행은 같은 캐시 파일을 디스크에서 한 번만 읽습니다. `0`은 문제 해결용으로, 매번 다시 읽습니다 |
+| `JIPFIT_LIFECYCLE_RATE` | `2` | API 하나에 보내는 초당 최대 호출 수. 건축물대장·폐쇄말소대장·건축인허가·실거래가를 따로 셉니다 |
+| `JIPFIT_LIFECYCLE_RATE_MIN` | `1` | HTTP 429로 속도를 낮출 때의 최저 초당 호출 수. `RATE`가 이보다 작으면 `RATE`가 최저값입니다 |
 
 인증키는 `MOLIT_SERVICE_KEY`를 씁니다.
 
@@ -135,6 +137,19 @@ Lifecycle 파일 읽기: 디스크 31,632회(파일 31,632개) · 재사용 93,1
 - `최대 메모리`는 이번 실행만이 아니라 그 프로세스가 시작한 뒤의 최댓값입니다.
 - `판정`은 수집을 뺀 판정 시간입니다. 판정하지 않은 실행(수집 재시도, 이미 반영한 달, 지문 저장)에는 없습니다.
 
+수집 속도는 다음 줄로 확인합니다.
+
+```text
+Lifecycle 호출 속도: BldRgstHubService 초당 2.00회 · ShtRgstHubService 초당 2.00회 · ArchPmsHubService 초당 2.00회 · RTMSDataSvcAptTradeDev 초당 2.00회
+Lifecycle 호출 속도 ArchPmsHubService 초당 2.00 → 1.00회 (HTTP 429)
+다시 묻기 582건
+```
+
+- 첫 줄은 실행(자동 시도, `run`, `run --dry-run`)을 시작할 때의 API별 속도입니다. 낮아진 속도는 updater가 다시 시작할 때까지 다음 시도에도 이어집니다.
+- 속도는 HTTP 429를 받으면 반으로 줄고 그 API만 5초 쉽니다. 성공이 200번 이어질 때마다 초당 0.25회씩 `JIPFIT_LIFECYCLE_RATE`까지 돌아옵니다. 속도가 바뀔 때만 줄이 나옵니다.
+- `다시 묻기`는 기본 대장 조회 중 일시 오류(HTTP 429·502·503·504, 연결 실패, 응답 형식 불일치, 응답 코드 04·05)로 끝난 건수입니다. 60초 뒤 같은 시도에서 한 번 더 묻고, 바로 아래에 그 결과가 나옵니다. 수집 시간이 60초보다 적게 남았으면 묻지 않습니다.
+- 초당 2회면 기본 대장 약 28,000건에 약 77분이 걸립니다. 속도가 낮아져 90분을 넘으면 남은 조회는 다음 시도가 이어받습니다.
+
 ```powershell
 docker compose -f compose.yaml -f compose.pages.yaml exec db psql -U jipfit -d jipfit -c "SELECT month, status, attempts, remaining_calls, batch, last_error FROM complex_lifecycle_runs ORDER BY month DESC LIMIT 3;"
 ```
@@ -216,6 +231,8 @@ docker compose -f compose.yaml -f compose.pages.yaml --profile updates exec upda
 | `lifecycle:month-changed` | 월말에 수집하다 달이 바뀜 | 새 달의 실행이 판정합니다 |
 | `Lifecycle ...: rejected` | 묶음 파일이 손상됨 | 묶음은 반영되지 않습니다. 원인을 확인해야 합니다 |
 | 메모리 부족이나 읽어 둔 파일이 의심됨 | 파일 한 번 읽기 문제 | `.env`에 `JIPFIT_LIFECYCLE_READ_ONCE=0`을 넣고 updater만 다시 올립니다(아래). 판정 결과는 같고 느려집니다 |
+| `HTTP 429`가 많고 속도가 자주 내려감 | API의 초당 한도보다 빠름 | `.env`에서 `JIPFIT_LIFECYCLE_RATE`를 낮추고(예: `1`) updater만 다시 올립니다 |
+| 수집이 늘 90분을 넘음 | 속도에 비해 조회가 많음 | 429가 거의 없으면 `JIPFIT_LIFECYCLE_RATE`를 올립니다(예: `3`). 그대로 두고 다음 시도에 맡겨도 됩니다 |
 
 - API가 크게 실패한 달에는 4번째 시도가 받은 자료로 판정해, 기존 보류의 코드가 `수집미완`으로 바뀌고 `holds` 기본 목록에서 빠질 수 있습니다. `remaining_calls`가 크면 `holds --all`로 확인합니다.
 - 응답 형식 오류 원문은 인증키를 가린 채 `monthly/<YYYY-MM>/format_errors/`에 남습니다.

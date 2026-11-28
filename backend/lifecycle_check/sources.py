@@ -7,10 +7,17 @@ read_once is new in Jipfit: opening a file on the updater's Windows bind mount i
 the same registers several times, so inside its block every file is read from disk once.
 
   JIPFIT_LIFECYCLE_READ_ONCE  0 reads every file again each time it is asked for
+
+Call pacing is new in Jipfit too: each API gets its calls a fixed interval apart, whatever the number of
+threads, and slower after HTTP 429 (the 1 second K-apt interval of the original, made per API).
+
+  JIPFIT_LIFECYCLE_RATE       most calls per second to one API (2)
+  JIPFIT_LIFECYCLE_RATE_MIN   lowest rate HTTP 429 can bring it down to (1)
 """
 import errno
 import hashlib
 import json
+import math
 import os
 import re
 import threading
@@ -261,14 +268,122 @@ def cached(cache, service, params):
     return None if value is MISSING else value
 
 
+# Call pacing
+
+RATE, RATE_MIN = 2.0, 1.0
+PAUSE = 5  # Seconds an API gets no call after HTTP 429.
+RECOVERY, STEP = 200, 0.25  # Successes in a row before the rate rises again, and by how much.
+
+
+class Pace:
+    """The calls to one API, shared by every thread: they leave 1/rate seconds apart, slower after HTTP 429."""
+
+    def __init__(self, name, limit, floor):
+        self.name, self.limit, self.floor = name, limit, floor
+        self.rate = limit
+        self.next_at = 0.0  # The time.monotonic() before which the next call may not leave.
+        self.successes = self.pauses = 0
+        self.lock = threading.Lock()
+
+    def wait(self):
+        """Reserve the next departure and sleep until it; reserve again if a pause began meanwhile."""
+        while True:
+            with self.lock:
+                now = time.monotonic()
+                start = max(now, self.next_at)
+                self.next_at = start + 1 / self.rate
+                pauses = self.pauses
+            if start > now:
+                time.sleep(start - now)
+            if pauses == self.pauses:
+                return
+
+    def throttled(self):
+        """HTTP 429: half the rate and a pause, which the calls already waiting take too."""
+        with self.lock:
+            before = self.rate
+            self.rate = after = max(self.floor, before / 2)
+            # Reservations made so far are void: their threads reserve again after the pause.
+            self.next_at = time.monotonic() + PAUSE
+            self.pauses += 1
+            self.successes = 0
+        self.report(before, after, "HTTP 429")
+
+    def succeeded(self):
+        with self.lock:
+            self.successes += 1
+            before = after = self.rate
+            if self.successes % RECOVERY == 0:
+                self.rate = after = min(self.limit, before + STEP)
+        self.report(before, after, f"성공 {RECOVERY}회")
+
+    def failed(self):
+        with self.lock:
+            self.successes = 0
+
+    def report(self, before, after, reason):
+        if before != after:
+            print(f"Lifecycle 호출 속도 {self.name} 초당 {before:.2f} → {after:.2f}회 ({reason})", flush=True)
+
+
+# Kept for the life of the process, so a lowered rate carries over to the next attempt.
+_paces = {}
+_paces_lock = threading.Lock()
+
+
+def api_of(service):
+    """The API a service belongs to; the portal's limits are taken to apply to each API."""
+    return SERVICES[service].split("/")[0]
+
+
+def call_rate(name, default):
+    value = (os.environ.get(name) or "").strip()
+    try:
+        rate = float(value or default)
+    except ValueError:
+        rate = 0
+    if not 0 < rate < math.inf:
+        print(f"Lifecycle 설정 {name}={value}: 0보다 큰 숫자가 아니어서 기본값 {default:g}로 수집합니다.", flush=True)
+        return default
+    return rate
+
+
+def paces():
+    """The pace of every API, made from the settings on first use."""
+    with _paces_lock:
+        if not _paces:
+            limit = call_rate("JIPFIT_LIFECYCLE_RATE", RATE)
+            # A rate set below the minimum is also the minimum, so HTTP 429 never raises it.
+            floor = min(call_rate("JIPFIT_LIFECYCLE_RATE_MIN", RATE_MIN), limit)
+            for name in map(api_of, SERVICES):
+                _paces.setdefault(name, Pace(name, limit, floor))
+        return _paces
+
+
+def rate_line():
+    return "Lifecycle 호출 속도: " + " · ".join(
+        f"{name} 초당 {pace.rate:.2f}회" for name, pace in paces().items())
+
+
 def request_molit(service, url):
+    """One response, paced per API. fetch, which reads the body, reports whether it was a success."""
+    pace = paces()[api_of(service)]
     for delay in (1.2, 2.5, 0.0):
+        pace.wait()
         try:
-            return request(url)
+            body = request(url)
         except SourceError as exc:
-            if str(exc) != "HTTP 429" or not delay:
+            if str(exc) != "HTTP 429":
+                pace.failed()
+                raise
+            pace.throttled()
+            if not delay:
                 raise
             time.sleep(delay)
+        else:
+            if not body.strip():
+                pace.failed()
+            return body
 
 
 def fetch(cache, keys, service, params, *, refresh=False, ask=None, parse=None):
@@ -288,7 +403,13 @@ def fetch(cache, keys, service, params, *, refresh=False, ask=None, parse=None):
         query = dict(params, serviceKey=unquote(key))
         query.update(pageNo=page, numOfRows=page_size)
         raw = ask(service, f"{MOLIT}{SERVICES[service]}?{urlencode(query)}")
-        count, rows = parse(raw, service, page)
+        pace = paces()[api_of(service)]
+        try:
+            count, rows = parse(raw, service, page)
+        except SourceError:
+            pace.failed()  # An error inside the response ends the successes in a row too.
+            raise
+        pace.succeeded()
         if total is None:
             total = count
         if count != total or count < 0 or not isinstance(rows, list) or len(result) + len(rows) > count:

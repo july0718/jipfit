@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import shutil
+import time
 from collections import Counter
 from datetime import date
 
@@ -28,6 +29,8 @@ INCOMPLETE_HOLD = "수집미완"
 # A monthly cache started longer ago than this holds another month's registers.
 CACHE_DAYS = 7
 CACHE_MARKER = "monthly.json"
+# Seconds before the basic registers that failed briefly are asked once more in the same attempt.
+RETRY_PAUSE = 60
 # holding_reason's answers as DESIGN.md 7-b hold codes.
 HELD_CODES = {
     "사업장 철거완료일이 마지막 계약 이전": "철거후거래",
@@ -585,8 +588,15 @@ def collect_basic(targets, cache, keys, as_of, workers, deadline=None):
     calls = register_calls(targets, cache, as_of)
     print(f"지번 {len({t['parcel_key'] for t in targets})} · 조회할 기본 대장 {len(calls)}", flush=True)
     if calls:
-        for name, count in sorted(fetch_all(calls, cache, keys, workers, deadline=deadline).items()):
+        failed = []
+        outcome = fetch_all(calls, cache, keys, workers, deadline=deadline, failed=failed)
+        for name, count in sorted(outcome.items()):
             print(name, count, flush=True)
+        if failed and (deadline is None or deadline - time.monotonic() >= RETRY_PAUSE):
+            print(f"다시 묻기 {len(failed)}건", flush=True)
+            time.sleep(RETRY_PAUSE)
+            for name, count in sorted(fetch_all(failed, cache, keys, workers, deadline=deadline).items()):
+                print(name, count, flush=True)
 
 
 def collect_extra(rows, cache, keys, as_of, workers, deadline=None):

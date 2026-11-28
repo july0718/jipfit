@@ -1024,6 +1024,7 @@ class StageTests(Stage):
         new = self.new_complex()
         self.seed()
         self.failing = {(service, bun) for service in ("closed",) for bun in ("0700", "0900")}
+        self.patch(patch.object(monthly.time, "sleep"))  # The pause before the same attempt asks again.
         for attempt in (1, 2, 3):
             self.assertEqual(self.run_stage(), ["lifecycle:collecting"])
             run = self.run_row()
@@ -1033,7 +1034,8 @@ class StageTests(Stage):
         # A retry only asks for what is still missing.
         self.calls.clear()
         self.assertEqual(self.run_stage(), [])
-        self.assertEqual(sorted(self.calls), [("closed", "0700"), ("closed", "0900")])
+        # HTTP 429 is a brief failure, so each of the two is asked once more in the same attempt.
+        self.assertEqual(sorted(self.calls), [("closed", "0700")] * 2 + [("closed", "0900")] * 2)
         run = self.run_row()
         self.assertEqual((run["status"], run["attempts"], run["remaining"]), ("applied", 4, 2))
         results = {r["complex_id"]: r for r in lines(self.data / "batches" / BATCH / "results.jsonl")}

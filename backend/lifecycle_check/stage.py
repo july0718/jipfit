@@ -155,6 +155,7 @@ def run_month(today=None, *, dry_run=False, offline=False, workers=WORKERS):
         if not store.try_lock(lock):
             print("Lifecycle: 다른 월간 판정이 실행 중입니다.", flush=True)
             return ["lifecycle:locked"]
+        print(sources.rate_line(), flush=True)
         with sources.read_once():
             if dry_run:
                 return rehearse(paths, today, offline, workers)
