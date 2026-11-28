@@ -34,6 +34,7 @@ updater의 월간 작업이 매달 1일 06:00(KST)에 K-apt 갱신과 검증 메
 | `JIPFIT_LIFECYCLE_AUTO` | `0` | `1`일 때만 월간 작업이 판정합니다 |
 | `JIPFIT_LIFECYCLE_MAX_AUTO` | `20` | 한 달 자동 확정 한도. 넘으면 그 달 확정을 모두 `대량확정보류`로 둡니다 |
 | `JIPFIT_LIFECYCLE_COLLECT_MINUTES` | `90` | 한 번의 시도에서 수집에 쓰는 시간 |
+| `JIPFIT_LIFECYCLE_READ_ONCE` | `1` | 한 번의 실행은 같은 캐시 파일을 디스크에서 한 번만 읽습니다. `0`은 문제 해결용으로, 매번 다시 읽습니다 |
 
 인증키는 `MOLIT_SERVICE_KEY`를 씁니다.
 
@@ -45,7 +46,7 @@ updater의 월간 작업이 매달 1일 06:00(KST)에 K-apt 갱신과 검증 메
 
 - `MOLIT_SERVICE_KEY`가 다음 네 가지 data.go.kr API에 모두 활용 신청된 키인지 확인합니다: 건축HUB **건축물대장**(`BldRgstHubService`), **폐쇄말소대장**(`ShtRgstHubService`), **건축인허가**(`ArchPmsHubService`, 철거·멸실), 국토부 **아파트 매매 실거래가 상세**(`RTMSDataSvcAptTradeDev`, 새 법정동 코드 확인).
 - 한 달 조회가 대장 종류마다 약 9,300건(합계 약 28,000건)입니다. 각 API의 하루 호출 한도가 이보다 큰지 확인합니다.
-- Docker에 메모리 여유가 있는지 확인합니다. 판정 중 updater가 약 500MB를 더 씁니다(거래 145만 행 기준).
+- Docker에 메모리 여유가 있는지 확인합니다. 판정 중 updater는 약 1.2GB를 씁니다(2026-11-28 거래 145만 행, 판정만 측정: 1,114MB. 파일 한 번 읽기를 끄면 455MB).
 - 디스크에 1.5GB 이상의 여유가 필요합니다(기준 자료 약 560MB와 월별 캐시).
 
 ### 1. DB 전체 백업
@@ -125,7 +126,14 @@ docker compose -f compose.yaml -f compose.pages.yaml logs --tail 100 updater
 
 ```text
 Lifecycle monthly-20261201: 대상 9,290 / 수집 완료 / 현존 확인 12 / 자동 확정 3 / 보류 5(운영자 확인 4) / 후속 연결 2
+Lifecycle 파일 읽기: 디스크 31,632회(파일 31,632개) · 재사용 93,145회 · 최대 메모리 1,114MB · 판정 3분 6초
 ```
+
+`파일 읽기` 줄은 실행(자동 시도, `run`, `run --dry-run`, `seed-fingerprints`)이 끝날 때 한 번 나옵니다.
+
+- `디스크`와 `파일` 수가 같으면 파일마다 한 번만 읽은 것입니다. `재사용`은 읽어 둔 내용을 다시 쓴 횟수입니다.
+- `최대 메모리`는 이번 실행만이 아니라 그 프로세스가 시작한 뒤의 최댓값입니다.
+- `판정`은 수집을 뺀 판정 시간입니다. 판정하지 않은 실행(수집 재시도, 이미 반영한 달, 지문 저장)에는 없습니다.
 
 ```powershell
 docker compose -f compose.yaml -f compose.pages.yaml exec db psql -U jipfit -d jipfit -c "SELECT month, status, attempts, remaining_calls, batch, last_error FROM complex_lifecycle_runs ORDER BY month DESC LIMIT 3;"
@@ -207,7 +215,23 @@ docker compose -f compose.yaml -f compose.pages.yaml --profile updates exec upda
 | `lifecycle:locked` | 다른 판정이 실행 중 | 끝난 뒤 다시 실행 |
 | `lifecycle:month-changed` | 월말에 수집하다 달이 바뀜 | 새 달의 실행이 판정합니다 |
 | `Lifecycle ...: rejected` | 묶음 파일이 손상됨 | 묶음은 반영되지 않습니다. 원인을 확인해야 합니다 |
+| 메모리 부족이나 읽어 둔 파일이 의심됨 | 파일 한 번 읽기 문제 | `.env`에 `JIPFIT_LIFECYCLE_READ_ONCE=0`을 넣고 updater만 다시 올립니다(아래). 판정 결과는 같고 느려집니다 |
 
 - API가 크게 실패한 달에는 4번째 시도가 받은 자료로 판정해, 기존 보류의 코드가 `수집미완`으로 바뀌고 `holds` 기본 목록에서 빠질 수 있습니다. `remaining_calls`가 크면 `holds --all`로 확인합니다.
 - 응답 형식 오류 원문은 인증키를 가린 채 `monthly/<YYYY-MM>/format_errors/`에 남습니다.
 - 한 달을 건너뛰려면 `complex_lifecycle_runs`에서 그 달 상태를 `disabled`로 둡니다.
+- **월간 실행 중에는 `import-reference`를 하지 않습니다.** 실행은 한 번 읽은 기준 자료를 다시 확인하지 않습니다.
+
+### 파일 한 번 읽기 끄기
+
+`.env`에 `JIPFIT_LIFECYCLE_READ_ONCE=0`을 넣고 updater만 다시 올립니다(05:30~07:30 KST는 피함). 되돌릴 때는 그 줄을 지우고 같은 명령을 실행합니다.
+
+```powershell
+docker compose -f compose.yaml -f compose.pages.yaml --profile updates up -d --no-deps updater
+```
+
+수동 실행 한 번만 끄려면 다시 올리지 않고 `exec` 뒤에 `-e JIPFIT_LIFECYCLE_READ_ONCE=0`을 붙입니다.
+
+```powershell
+docker compose -f compose.yaml -f compose.pages.yaml --profile updates exec -e JIPFIT_LIFECYCLE_READ_ONCE=0 updater python lifecycle_admin.py run --dry-run
+```

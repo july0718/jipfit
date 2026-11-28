@@ -2,12 +2,20 @@
 
 complete_snapshot comes from jipfit_lifecycle@d86dcdf:verify_lifecycle.py. Only the services the monthly
 check asks for are kept, the key comes from the environment and retrieval days are KST days.
+
+read_once is new in Jipfit: opening a file on the updater's Windows bind mount is slow and one run asks for
+the same registers several times, so inside its block every file is read from disk once.
+
+  JIPFIT_LIFECYCLE_READ_ONCE  0 reads every file again each time it is asked for
 """
+import errno
 import hashlib
 import json
 import os
 import re
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
@@ -16,6 +24,11 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from xml.etree import ElementTree
 
 from lifecycle_check.common import text, ymd
+
+try:
+    import resource
+except ImportError:  # Windows, where no monthly run takes place.
+    resource = None
 
 KST = timezone(timedelta(hours=9))
 MOLIT = "https://apis.data.go.kr/1613000/"
@@ -107,11 +120,145 @@ def cache_file(cache, service, params):
     return cache / service / f"{digest}.json"
 
 
+# Reading once per run
+
+MISSING = object()  # The saved answer for a file that is not there.
+
+
+class ReadOnce:
+    """The files one run has read. Every caller gets the same objects, so none of them may change one."""
+
+    def __init__(self, keep):
+        self.keep = keep  # False counts the reads and saves nothing.
+        self.lock = threading.Lock()
+        self.parsed, self.bodies, self.results = {}, {}, {}
+        self.files = set()
+        self.disk = self.reused = 0
+        self.judge_seconds = None
+
+    def get(self, saved, path, read, parse):
+        """The saved answer for the path, else the file read from disk; MISSING when there is no file."""
+        key = os.path.abspath(str(path))
+        # Held while reading, so threads asking for the same file read it once.
+        with self.lock:
+            if key in saved:
+                self.reused += 1
+                return saved[key]
+            try:
+                raw = read(path)
+            except (FileNotFoundError, NotADirectoryError):
+                value = MISSING
+            else:
+                self.disk += 1
+                self.files.add(key)
+                value = parse(raw)  # A broken file raises here and is not saved.
+            if self.keep:
+                saved[key] = value
+            return value
+
+    def replace(self, path, body):
+        """The run wrote the file: save what reading it back would give."""
+        if not self.keep:
+            return
+        key, value = os.path.abspath(str(path)), json.loads(body)
+        with self.lock:
+            self.parsed[key] = value
+            self.bodies.pop(key, None)
+
+    def clear(self):
+        with self.lock:
+            for saved in (self.parsed, self.bodies, self.results):
+                saved.clear()
+
+    def stats(self):
+        return {"disk": self.disk, "reused": self.reused, "files": len(self.files)}
+
+    def summary(self):
+        parts = [f"디스크 {self.disk:,}회(파일 {len(self.files):,}개)", f"재사용 {self.reused:,}회"]
+        if resource:  # The peak of the whole process, in KB on Linux.
+            parts.append(f"최대 메모리 {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:,.0f}MB")
+        if self.judge_seconds is not None:
+            minutes, seconds = divmod(round(self.judge_seconds), 60)
+            parts.append(f"판정 {minutes}분 {seconds}초")
+        return "Lifecycle 파일 읽기: " + " · ".join(parts)
+
+
+# A module global rather than a context variable, so the collection threads see the same store.
+_store = None
+
+
+@contextmanager
+def read_once():
+    """Read each file once until the block ends, then forget it all; an inner block uses the outer one's."""
+    global _store
+    if _store is not None:
+        yield _store
+        return
+    store = _store = ReadOnce((os.environ.get("JIPFIT_LIFECYCLE_READ_ONCE") or "").strip() != "0")
+    try:
+        yield store
+    finally:
+        _store = None
+        store.clear()
+        print(store.summary(), flush=True)
+
+
+def read_text(path):
+    return path.read_text(encoding="utf-8")
+
+
+def read_json(path):
+    """The parsed JSON file. Inside read_once() the same object is returned again and must not be changed."""
+    if _store is None:
+        return json.loads(read_text(path))
+    value = _store.get(_store.parsed, path, read_text, json.loads)
+    if value is MISSING:
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(path))
+    return value
+
+
+def read_bytes(path):
+    """The file's bytes, read once inside read_once()."""
+    if _store is None:
+        return path.read_bytes()
+    value = _store.get(_store.bodies, path, lambda p: p.read_bytes(), lambda body: body)
+    if value is MISSING:
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(path))
+    return value
+
+
+def once_per_run(key, make):
+    """make()'s result, made once per read_once() block. Only for files that no run writes."""
+    if _store is None or not _store.keep:
+        return make()
+    if key not in _store.results:
+        _store.results[key] = make()
+    return _store.results[key]
+
+
+def note_write(path, body):
+    """The run wrote this text to a cache file, as fetch does."""
+    if _store is not None:
+        _store.replace(path, body)
+
+
+def forget_reads():
+    """Files were removed, so nothing saved may answer for them."""
+    if _store is not None:
+        _store.clear()
+
+
+def note_judgement(seconds):
+    if _store is not None:
+        _store.judge_seconds = seconds
+
+
 def cached(cache, service, params):
     p = cache_file(cache, service, params)
-    if p.exists():
-        return json.loads(p.read_text(encoding="utf-8"))
-    return None
+    if _store is None:
+        return json.loads(read_text(p)) if p.exists() else None
+    value = _store.get(_store.parsed, p, read_text, json.loads)
+    return None if value is MISSING else value
 
 
 def request_molit(service, url):
@@ -160,8 +307,10 @@ def fetch(cache, keys, service, params, *, refresh=False, ask=None, parse=None):
     snapshot = {"retrieved_on": today().isoformat(), "total": total, "rows": result}
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    body = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+    tmp.write_text(body, encoding="utf-8")
     tmp.replace(p)
+    note_write(p, body)
     return snapshot
 
 

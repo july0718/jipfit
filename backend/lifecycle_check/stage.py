@@ -113,8 +113,11 @@ def evaluate(tables, fingerprints, cache, reference, as_of, version):
 
 
 def judge(tables, fingerprints, cache, reference, as_of):
+    started = time.monotonic()
     outcome = evaluate(tables, fingerprints, cache, reference, as_of, verifier_version())
-    return hold_mass_confirmations(outcome, states_of(tables), setting("JIPFIT_LIFECYCLE_MAX_AUTO", 20))
+    guarded = hold_mass_confirmations(outcome, states_of(tables), setting("JIPFIT_LIFECYCLE_MAX_AUTO", 20))
+    sources.note_judgement(time.monotonic() - started)
+    return guarded
 
 
 def counted(outcome):
@@ -152,9 +155,10 @@ def run_month(today=None, *, dry_run=False, offline=False, workers=WORKERS):
         if not store.try_lock(lock):
             print("Lifecycle: 다른 월간 판정이 실행 중입니다.", flush=True)
             return ["lifecycle:locked"]
-        if dry_run:
-            return rehearse(paths, today, offline, workers)
-        return advance(paths, today, offline, workers)
+        with sources.read_once():
+            if dry_run:
+                return rehearse(paths, today, offline, workers)
+            return advance(paths, today, offline, workers)
 
 
 def advance(paths, today, offline, workers):

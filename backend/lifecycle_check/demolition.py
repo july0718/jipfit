@@ -3,14 +3,15 @@
 kapt_records, project_pages and lot_removals come from jipfit_lifecycle@d86dcdf:auto_link.py, val from
 project_evidence.py and the text lines of a cleanup page (Page) from public_documents.py.
 """
-import json
+import os
 import re
 from collections import defaultdict
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urlsplit
 
+from lifecycle_check import data_dir
 from lifecycle_check.common import name_key, residential, ymd
-from lifecycle_check.sources import complete_snapshot, parcel_params
+from lifecycle_check.sources import complete_snapshot, once_per_run, parcel_params, read_bytes, read_json
 
 TARGETS = ("pending1", "pending2")
 
@@ -51,23 +52,31 @@ class Page(HTMLParser):
 def kapt_records(cache):
     records = {}
     for path in (cache / "kapt_info").glob("*.json"):
-        for row in json.loads(path.read_text(encoding="utf-8"))["rows"]:
+        for row in read_json(path)["rows"]:
             records[val(row, "kaptCode")] = row
     return list(records.values())
 
 
 def project_pages(cache):
     """Cached 정비사업 zone locations and recorded demolition completion dates, by cafe id."""
+    folder = os.path.abspath(cache)
+    # Only the reference cache is never written during a run (prepare_cache), so only its result is kept.
+    if folder != os.path.abspath(data_dir() / "reference"):
+        return parse_project_pages(cache)
+    return once_per_run(("project_pages", folder), lambda: parse_project_pages(cache))
+
+
+def parse_project_pages(cache):
     zones, removals = {}, defaultdict(set)
     for meta in sorted((cache / "public_documents").glob("*.json")):
-        details = json.loads(meta.read_text(encoding="utf-8"))
+        details = read_json(meta)
         url, body = details.get("url", ""), meta.with_suffix(".bin")
         parts = urlsplit(url)
         cafe = parse_qs(parts.query).get("cafeId", [""])[0]
         summary, history = "mastr-cleanup-bsnsSumry" in url, "cleanup-prtnelapse" in url
         if parts.hostname != "cleanup.seoul.go.kr" or not cafe or not (summary or history) or not body.is_file():
             continue
-        line = " | ".join(Page(body.read_bytes(), details.get("charset")).lines)
+        line = " | ".join(Page(read_bytes(body), details.get("charset")).lines)
         if summary and (location := re.search(r"정비구역 위치 \| ([^|]+)", line)):
             zones[cafe] = (location[1].strip(), url)
         if history:
@@ -93,7 +102,7 @@ def current_homes(cache):
     """Cached current residential titles by (시군구, 법정동, name) with their approval year and lot."""
     homes = defaultdict(set)
     for path in (cache / "current").glob("*.json"):
-        for row in json.loads(path.read_text(encoding="utf-8"))["rows"]:
+        for row in read_json(path)["rows"]:
             if residential(row) and val(row, "bldNm"):
                 homes[val(row, "sigunguCd"), val(row, "bjdongCd"), name_key(val(row, "bldNm"))].add(
                     (val(row, "useAprDay")[:4], val(row, "platGbCd") or "0", val(row, "bun"), val(row, "ji")))

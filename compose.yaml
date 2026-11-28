@@ -70,6 +70,7 @@ services:
       JIPFIT_LIFECYCLE_AUTO: ${JIPFIT_LIFECYCLE_AUTO:-0}
       JIPFIT_LIFECYCLE_MAX_AUTO: ${JIPFIT_LIFECYCLE_MAX_AUTO:-20}
       JIPFIT_LIFECYCLE_COLLECT_MINUTES: ${JIPFIT_LIFECYCLE_COLLECT_MINUTES:-90}
+      JIPFIT_LIFECYCLE_READ_ONCE: ${JIPFIT_LIFECYCLE_READ_ONCE:-1}
     volumes:
       - ./verified-metadata:/metadata:ro
       - ./lifecycle-data:/lifecycle-data

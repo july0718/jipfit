@@ -252,6 +252,8 @@ class LifecycleDatabaseTests(unittest.TestCase):
 
         def fetch(cache, _keys, service, params, *, refresh=False, ask=None, parse=None):
             put(cache, service, params, answers.get((service, int(params["bun"])), []), clock[0])
+            path = sources.cache_file(cache, service, params)
+            sources.note_write(path, path.read_text(encoding="utf-8"))  # As the real fetch does.
 
         with patch("builtins.print"):
             apply.run_apply(self.db, self.results(), TODAY, dry=False)

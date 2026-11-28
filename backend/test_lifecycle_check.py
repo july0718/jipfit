@@ -898,6 +898,8 @@ class Stage(Folders):
         if (service, name) in self.failing:
             raise SourceError("HTTP 429")
         put(cache, service, params, self.answers.get((service, name), []), self.clock)
+        path = cache_file(cache, service, params)
+        sources.note_write(path, path.read_text(encoding="utf-8"))  # As the real fetch does.
 
     def seed(self):
         document = monthly.baseline_fingerprints(self.reference, BASE_DAY)

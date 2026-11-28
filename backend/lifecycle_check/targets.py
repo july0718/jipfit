@@ -4,9 +4,10 @@
 same dong names. The baseline cache is read together with the trade months fetched this month for dongs it
 does not know (jipfit_lifecycle@d86dcdf:collect_dong_codes.py).
 """
-import json
 import re
 from collections import Counter, defaultdict
+
+from lifecycle_check.sources import read_json
 
 # Same table as the Jipfit backend (backend/districts.py).
 DISTRICTS = {
@@ -34,7 +35,7 @@ def dong_codes(cache, *supplements):
     seen = defaultdict(Counter)
     paths = {path.name: path for folder in (cache, *supplements) for path in (folder / "trade_detail").glob("*.json")}
     for path in paths.values():
-        for row in json.loads(path.read_text(encoding="utf-8")).get("rows", []):
+        for row in read_json(path).get("rows", []):
             sgg, name, code = (str(row.get(k) or "").strip() for k in ("sggCd", "umdNm", "umdCd"))
             if re.fullmatch(r"\d{5}", sgg) and name and re.fullmatch(r"\d{5}", code):
                 seen[sgg, name][code] += 1

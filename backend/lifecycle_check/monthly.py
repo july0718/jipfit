@@ -18,7 +18,7 @@ from lifecycle_check.demolition import cancelled_roster, current_homes, holding_
 from lifecycle_check.demolition import project_pages
 from lifecycle_check.existence import BASIC, HOUSING, judge, real_cancellation
 from lifecycle_check.facts import complex_facts, register_calls
-from lifecycle_check.sources import cache_file, complete_snapshot, parcel_params
+from lifecycle_check.sources import cache_file, complete_snapshot, forget_reads, parcel_params, read_json
 
 BASIS_PRESENT = "자동 현존 확인"
 BASIS_CANCELLED = "대장 말소 자동 확정"
@@ -157,7 +157,7 @@ def cached_parcels(cache):
     keys = set()
     for service in BASIC:
         for path in (cache / service).glob("*.json"):
-            rows = json.loads(path.read_text(encoding="utf-8")).get("rows") or []
+            rows = read_json(path).get("rows") or []
             if not rows:
                 continue
             params = {k: str(rows[0].get(k) or "") for k in ("sigunguCd", "bjdongCd", "platGbCd", "bun", "ji")}
@@ -553,6 +553,7 @@ def prepare_cache(cache, reference, as_of):
             return
         print(f"{started}에 시작한 월별 캐시를 지우고 다시 받습니다: {cache}", flush=True)
         shutil.rmtree(cache)
+        forget_reads()
     elif cache.exists() and any(cache.iterdir()):
         raise ValueError(f"월별 캐시가 아닌 폴더입니다({CACHE_MARKER} 없음): {cache}")
     write_json(marker, {"started": as_of.isoformat()})

@@ -27,7 +27,7 @@ from lifecycle_check.common import csv_output
 from lifecycle_check.monthly import (
     INCOMPLETE_HOLD, MASS_HOLD, active_hold, baseline_fingerprints, evidence_text,
 )
-from lifecycle_check.sources import REFERENCE_FOLDERS, today as kst_today
+from lifecycle_check.sources import REFERENCE_FOLDERS, read_once, today as kst_today
 
 BASIS_OPERATOR = "운영자 확인"
 VERSION = "lifecycle_admin@manual"
@@ -400,7 +400,8 @@ def seed_fingerprints(db, reference, as_of):
         raise SystemExit(f"지문이 이미 {count:,}개 있습니다. 다시 만들지 않습니다")
     if not (reference / "trade_detail").is_dir():
         raise SystemExit(f"기준 자료가 없습니다: {reference}. 먼저 import-reference를 실행하세요")
-    document = baseline_fingerprints(reference, as_of)
+    with read_once():
+        document = baseline_fingerprints(reference, as_of)
     if not document["parcels"]:
         raise SystemExit(f"{as_of} 기준 기본 대장이 없습니다: {reference}")
     with db.transaction():
