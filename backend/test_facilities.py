@@ -1,13 +1,16 @@
 """Tests of the facility catalogs, the per-complex summary and where the updater calls them."""
+import asyncio
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import date
+import importlib.util
 import json
 from pathlib import Path
 import re
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
+from urllib.parse import quote
 
 # Installs the psycopg stand-in when the package is missing, so it must be imported first.
 from test_refresh_pipeline import check_placeholders
@@ -520,6 +523,66 @@ class CommandTests(unittest.TestCase):
         for name in ("NEIS_API_KEY", "TDATA_SUBWAY_API_KEY"):
             self.assertIn(f"{name}: ${{{name}:-}}", updater)
             self.assertIn(f"\n{name}=\n", (ROOT.parent / ".env.example").read_text(encoding="utf-8"))
+
+
+def installed(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ValueError:  # A stand-in module installed by another test has no spec.
+        return False
+
+
+@unittest.skipUnless(all(installed(name) for name in ("fastapi", "psycopg", "sklearn", "joblib")),
+                     "needs the API packages")
+class FacilityApiTests(unittest.TestCase):
+    def get(self, path, query="", rows=(), sources=()):
+        import main
+
+        class ApiDB(FacilityDB):
+            def execute(self, sql, params=None):
+                check_placeholders(sql, params)
+                self.log.append((" ".join(sql.split()), params))
+                return Rows(dict(row) for row in (sources if "facility_sources" in sql else rows))
+
+        db = ApiDB()
+        sent = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            sent.append(message)
+
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET",
+                 "scheme": "http", "path": path, "raw_path": path.encode(), "query_string": query.encode(),
+                 "root_path": "", "headers": [], "client": ("test", 1), "server": ("test", 80)}
+        with patch.object(main, "connect", return_value=db):
+            asyncio.run(main.app(scope, receive, send))
+        body = b"".join(message.get("body", b"") for message in sent[1:])
+        return sent[0]["status"], json.loads(body), db
+
+    def test_the_district_summary_is_keyed_by_complex_with_sources_in_order(self):
+        item = {"households": 206, "parking": 1.08, "station": ["흑석", "9호선", 412, 37.5, 126.96],
+                "schools": [["가초", "초등학교", 300, 37.5, 126.9]]}
+        sources = [{"source": name, "label": name + " 기준"} for name in ("schools", "apartments", "stations")]
+        status, body, db = self.get("/api/facilities", "district=" + quote("광진구"),
+                                    rows=[{"complex_id": HOME["complex_id"], **item}], sources=sources)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"sources": ["apartments 기준", "stations 기준", "schools 기준"],
+                                "items": {HOME["complex_id"]: item}})
+        self.assertEqual(db.statements("FROM complex_facilities")[0][1], ("광진구",))
+
+    def test_empty_tables_answer_empty(self):
+        status, body, _ = self.get("/api/facilities", "district=" + quote("광진구"))
+        self.assertEqual((status, body), (200, {"sources": [], "items": {}}))
+
+    def test_a_missing_or_unknown_district_is_rejected(self):
+        for query in ("", "district=" + quote("없는구"), "district="):
+            status, _, db = self.get("/api/facilities", query)
+            self.assertEqual((status, db.log), (422, []), query)
+
+    def test_the_revision_route_is_gone(self):
+        self.assertEqual(self.get("/api/metadata-revision")[0], 404)
 
 
 if __name__ == "__main__":

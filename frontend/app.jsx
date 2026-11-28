@@ -53,11 +53,11 @@ function matchesFacilities(f, filters) {
   return min(f?.households,filters.households) && min(f?.parking,filters.parking) &&
     max(f?.station?.[2],filters.station) && max(schoolAt(f,filters.level)?.[2],filters.school);
 }
-function FacilityPanel({ facilities }) {
+function FacilityPanel({ facilities, sources }) {
   return <section><h3>단지 규모와 주변 시설</h3><dl className="facility-details">
     {facilityFields.map(([label,show])=><React.Fragment key={label}><dt>{label}</dt><dd>{show(facilities)}</dd></React.Fragment>)}
-  </dl><small>거리 기준은 수록된 시설까지의 직선거리입니다. 학교 배정은 별도 확인이 필요합니다.{" "}
-    <a href="/metadata/facility-sources.txt" target="_blank" rel="noreferrer">자료 기준 확인</a></small></section>;
+  </dl><small>거리 기준은 수록된 시설까지의 직선거리입니다. 학교 배정은 별도 확인이 필요합니다.
+    {sources?.length > 0 && <><br/>자료 기준: {sources.join(" / ")}</>}</small></section>;
 }
 
 function ComplexDetail({ id, built }) {
@@ -407,7 +407,7 @@ function App() {
       </section>
       <section className="panel result" aria-label="예측 결과" aria-live="polite">
         {selected && <ComplexDetail key={selected.complex_id} id={selected.complex_id} built={selected.built}/>}
-        {selected && <FacilityPanel facilities={selected.facilities}/>}
+        {selected && <FacilityPanel facilities={selected.facilities} sources={selected.facility_sources}/>}
         {selected && <label>면적군
           <select value={home.area_group} onChange={e => select(selected.groups.find(g => g.area_group === Number(e.target.value)))}>
             {selected.groups.map(g => <option key={g.area_group} value={g.area_group}>

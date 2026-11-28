@@ -119,13 +119,47 @@ def print_summary(summary, quarantined):
                 print(f"  {cid} ({key})")
 
 
-def metadata_revision_text():
-    """The API's own digest, printed to confirm public data will notice the new state."""
+# A digest of complex metadata (including new registrations, geocoded coordinates,
+# and confirmed lifecycle demolition state) combined with verified metadata evidence.
+REVISION_SQL = """
+            SELECT md5(
+                coalesce((
+                    SELECT md5(string_agg(
+                        md5(jsonb_build_array(
+                            c.complex_id, c.name, c.address, c.built, c.latitude, c.longitude,
+                            COALESCE(ls.existence = 'demolished', FALSE)
+                        )::text),
+                        '' ORDER BY c.complex_id
+                    )) FROM complexes c LEFT JOIN complex_lifecycle_state ls USING (complex_id)
+                ), '') || ':' ||
+                coalesce((
+                    SELECT md5(string_agg(
+                        md5(jsonb_build_array(batch, complex_id, evidence, changes)::text),
+                        '' ORDER BY batch, complex_id
+                    )) FROM complex_metadata_evidence
+                ), '') || ':' ||
+                coalesce((
+                    SELECT md5(string_agg(
+                        md5(jsonb_build_array(complex_id, existence, result_key, as_of)::text),
+                        '' ORDER BY complex_id
+                    )) FROM complex_lifecycle_state WHERE existence IS NOT NULL
+                ), '')
+            ) AS revision
+        """
+
+
+def metadata_revision(db):
+    """The public data digest of the database behind this connection."""
+    return db.execute(REVISION_SQL).fetchone()[0]
+
+
+def metadata_revision_text(db):
+    """The digest, printed to confirm that the new state changes the public data."""
     try:
-        from main import metadata_revision
-        return metadata_revision()["revision"]
+        with db.transaction():
+            return metadata_revision(db)
     except Exception as exc:
-        return f"확인 불가({type(exc).__name__}); GET /api/metadata-revision 으로 확인"
+        return f"확인 불가({type(exc).__name__})"
 
 
 def run_apply(db, results, today, *, dry, allow_conflicts=False):
@@ -152,7 +186,7 @@ def run_apply(db, results, today, *, dry, allow_conflicts=False):
     if conflicts and not allow_conflicts:
         raise SystemExit("효력일 이후 거래가 있어 반영하지 않았습니다. 결과 파일의 효력일을 확인하세요"
                          " (확인 후 강행: --allow-trade-conflicts).")
-    revision_before = metadata_revision_text()
+    revision_before = metadata_revision_text(db)
     summary, quarantined = apply_each(db, results, today)
     print_summary(summary, quarantined)
     derived = sync_derived(db, [r.complex_id for r in results], today)
@@ -165,7 +199,7 @@ def run_apply(db, results, today, *, dry, allow_conflicts=False):
     """).fetchone()[0]
     print(f"demolition_confirmed 단지 {hidden}곳, 마커 대상 {len(before)} -> {len(after)} ({len(after) - len(before):+d})")
     print(f"refresh_revision_pending {revisions_before} -> {pending_revisions(db)}")
-    print(f"metadata-revision {revision_before} -> {metadata_revision_text()}")
+    print(f"metadata-revision {revision_before} -> {metadata_revision_text(db)}")
     print("정적 데이터는 export_public_json.py(배포 절차)를 다시 실행해야 갱신됩니다.")
     successor_report(db, results)
     return summary

@@ -214,10 +214,10 @@ class LifecycleDatabaseTests(unittest.TestCase):
         self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_quarantine"), 0)
 
     def public_revision(self):
-        """The digest GET /api/metadata-revision returns, from the query in main.py (fastapi is not needed)."""
-        source = (ROOT / "main.py").read_text(encoding="utf-8").split("def metadata_revision():")[1]
-        query = source.split('db.execute("""')[1].split('""")')[0]
-        return self.db.execute(query).fetchone()[0]
+        """The digest of the public complex data (apply_lifecycle_baseline.REVISION_SQL)."""
+        import apply_lifecycle_baseline as apply
+
+        return self.db.execute(apply.REVISION_SQL).fetchone()[0]
 
     def public_state(self):
         import apply_lifecycle_baseline as apply
@@ -510,6 +510,15 @@ class LifecycleDatabaseTests(unittest.TestCase):
             ("새 출처 · 조회 2026-12-01", 400, "2026-12"))
         self.assertEqual(self.value("SELECT station->>0 FROM complex_facilities WHERE complex_id=%s", (STAYS,)),
                          "새 역")
+        if all(importlib.util.find_spec(name) for name in ("fastapi", "sklearn")):
+            import main
+            from psycopg.rows import dict_row
+
+            with patch.object(main, "connect", lambda: connect(self.conninfo, row_factory=dict_row)):
+                body = main.list_facilities("구로구")
+            self.assertEqual((len(body["sources"]), len(body["items"])), (3, 4))
+            self.assertEqual(body["sources"][1], "새 출처 · 조회 2026-12-01")
+            self.assertEqual(body["items"][STAYS]["station"], ["새 역", "1호선", 0, 37.5, 126.9])
 
 
 if __name__ == "__main__":

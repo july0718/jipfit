@@ -3,6 +3,7 @@ from collections import Counter
 from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
+from hashlib import sha256
 import importlib.util
 import json
 from pathlib import Path
@@ -454,6 +455,30 @@ class DeleteTests(unittest.TestCase):
         other.write_text(json.dumps({"version": 1, "targets": {}, "tables": {"app_users": []}}), encoding="utf-8")
         with self.assertRaises(ValueError):
             dc.restore(ScriptedDB(), other)
+
+
+class RevisionTests(unittest.TestCase):
+    # SHA-256 of the query GET /api/metadata-revision ran in main.py at 33bbd79, before it moved here.
+    ENDPOINT_QUERY = "03df148899dcd508efa0be22cf7d408f4559b2020286ec56000da99fb3506b75"
+
+    def test_the_query_is_the_one_the_endpoint_ran(self):
+        self.assertEqual(sha256(apply.REVISION_SQL.encode("utf-8")).hexdigest(), self.ENDPOINT_QUERY)
+
+    def test_the_digest_comes_from_the_given_connection(self):
+        db = ScriptedDB([("SELECT md5(", [("abc",)])])
+        self.assertEqual(apply.metadata_revision(db), "abc")
+        self.assertEqual(db.log, [(" ".join(apply.REVISION_SQL.split()), None)])
+        self.assertEqual(apply.metadata_revision_text(db), "abc")
+
+    def test_a_failure_is_named_without_pointing_at_the_removed_endpoint(self):
+        with patch.object(apply, "metadata_revision", side_effect=RuntimeError("secret")):
+            self.assertEqual(apply.metadata_revision_text(ScriptedDB()), "확인 불가(RuntimeError)")
+
+    def test_neither_the_script_nor_the_api_keeps_the_endpoint(self):
+        for name in ("apply_lifecycle_baseline.py", "main.py"):
+            source = (ROOT / name).read_text(encoding="utf-8")
+            self.assertNotIn("/api/metadata-revision", source, name)
+            self.assertNotIn("from main import", source, name)
 
 
 class PackagingTests(unittest.TestCase):

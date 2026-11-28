@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Query
 from account_api import router
 from database import connect
 from districts import DISTRICTS
+from facilities import SOURCES as FACILITY_SOURCES
 
 from complex_list import load_home_rows
 from inference import forecast, load_model
@@ -61,38 +62,6 @@ def list_districts():
             for code, name in DISTRICTS.items()]
 
 
-@app.get("/api/metadata-revision")
-def metadata_revision():
-    # A digest of complex metadata (including new registrations, geocoded coordinates,
-    # and confirmed lifecycle demolition state) combined with verified metadata evidence.
-    with connect() as db:
-        return db.execute("""
-            SELECT md5(
-                coalesce((
-                    SELECT md5(string_agg(
-                        md5(jsonb_build_array(
-                            c.complex_id, c.name, c.address, c.built, c.latitude, c.longitude,
-                            COALESCE(ls.existence = 'demolished', FALSE)
-                        )::text),
-                        '' ORDER BY c.complex_id
-                    )) FROM complexes c LEFT JOIN complex_lifecycle_state ls USING (complex_id)
-                ), '') || ':' ||
-                coalesce((
-                    SELECT md5(string_agg(
-                        md5(jsonb_build_array(batch, complex_id, evidence, changes)::text),
-                        '' ORDER BY batch, complex_id
-                    )) FROM complex_metadata_evidence
-                ), '') || ':' ||
-                coalesce((
-                    SELECT md5(string_agg(
-                        md5(jsonb_build_array(complex_id, existence, result_key, as_of)::text),
-                        '' ORDER BY complex_id
-                    )) FROM complex_lifecycle_state WHERE existence IS NOT NULL
-                ), '')
-            ) AS revision
-        """).fetchone()
-
-
 @app.get("/api/complexes")
 def list_complexes(include_sort: bool = False, district: str | None = None, live_only: bool = False):
     if district is not None and district not in DISTRICTS.values():
@@ -100,6 +69,21 @@ def list_complexes(include_sort: bool = False, district: str | None = None, live
     with connect() as db:
         return load_home_rows(db, district=district, include_sort=include_sort,
                               live_only=live_only, model=app.state.model)
+
+
+@app.get("/api/facilities")
+def list_facilities(district: str | None = None):
+    if district not in DISTRICTS.values():
+        raise HTTPException(422, "지원하지 않는 자치구입니다.")
+    with connect() as db:
+        labels = {row["source"]: row["label"]
+                  for row in db.execute("SELECT source, label FROM facility_sources").fetchall()}
+        rows = db.execute("""
+            SELECT complex_id, households, parking, station, schools FROM complex_facilities
+            WHERE split_part(complex_id, ' ', 2) = %s
+        """, (district,)).fetchall()
+    return {"sources": [labels[source] for source in FACILITY_SOURCES if source in labels],
+            "items": {row.pop("complex_id"): row for row in rows}}
 
 
 @app.get("/api/complex")

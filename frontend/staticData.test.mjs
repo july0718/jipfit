@@ -12,7 +12,6 @@ import {
   positionedComplexes,
   pricedGroup,
 } from "./mapData.js";
-import { mergeHomeRow } from "./staticData.js";
 
 const districts = [
   {code: "11215", name: "광진구", bounds: [37.52, 127.06, 37.58, 127.12]},
@@ -21,29 +20,29 @@ const districts = [
 const row = name => ({ complex_id: "서울 " + name + " 테스트", area_group: 60 });
 const fresh = name => import("./staticData.js?" + name);
 const reflect = data => Response.json(data);
+const noFacilities = {sources: [], items: {}};
+const sources = ["공동주택 기준", "역 기준", "학교 기준"];
+const isFacilities = url => url.startsWith("/api/facilities?");
+const facilitiesFor = name => ({sources, items: {[row(name).complex_id]: {households: 100}}});
 
 test("first view requests only the selected district and revisits reuse its response", async t => {
   const seen = [];
   t.mock.method(globalThis, "fetch", async url => {
     seen.push(url);
     if (url === "/api/districts") return reflect(districts);
-    if (url.startsWith("/metadata/")) {
-      const name = districts.find(d => url.includes(d.code)).name;
-      return reflect([{...row(name), built: 2000}]);
-    }
-    const query = new URL(url, "http://localhost").searchParams;
-    return reflect([row(query.get("district"))]);
+    const name = new URL(url, "http://localhost").searchParams.get("district");
+    return reflect(isFacilities(url) ? facilitiesFor(name) : [row(name)]);
   });
   const {readDistricts, readHomes} = await fresh("scoped");
   const [catalog, initial] = await Promise.all([readDistricts(), readHomes(["광진구"])]);
   assert.deepEqual(catalog, districts);
-  assert.deepEqual(initial, [{...row("광진구"), built: 2000}]);
+  assert.deepEqual(initial, [{...row("광진구"), facilities: {households: 100}, facility_sources: sources}]);
   assert.equal(seen.length, 3);
   assert.deepEqual(await readHomes(["광진구"]), initial);
   assert.equal(seen.length, 3);
-  assert.deepEqual(await readHomes(["강서구"]), [{...row("강서구"), built: 2000}]);
+  assert.equal((await readHomes(["강서구"]))[0].facilities.households, 100);
   assert.equal(seen.length, 5);
-  assert.ok(seen.some(url => url.includes("live_only=true")));
+  assert.ok(seen.every(url => url.startsWith("/api/") && !url.includes("live_only")));
 });
 
 test("a missing district endpoint uses the existing DB endpoint only once", async t => {
@@ -64,7 +63,7 @@ test("an aborted request does not invalidate the shared district response", asyn
   const controller = new AbortController();
   let resolveRows;
   const started = new Promise(resolve => { resolveRows = resolve; });
-  t.mock.method(globalThis, "fetch", url => url === "/api/districts" ? reflect(districts) : url.startsWith("/metadata/") ? reflect([{complex_id: row("광진구").complex_id}]) : started);
+  t.mock.method(globalThis, "fetch", url => url === "/api/districts" ? reflect(districts) : isFacilities(url) ? reflect(noFacilities) : started);
   const {readDistricts, readHomes} = await fresh("abort");
   await readDistricts();
   const cancelled = readHomes(["광진구"], controller.signal);
@@ -124,32 +123,54 @@ test("district navigation never falls back to City Hall while another ward is lo
   assert.deepEqual(districtCenter("", [], null), [37.5665, 126.978]);
 });
 
-test("fresh DB coordinates replace the monthly copy and newly listed complexes load full data", async t => {
-  const existing = row("광진구");
-  const added = {...existing, complex_id: existing.complex_id + " 신규"};
+test("facilities join their complex and every other row keeps only the data basis", async t => {
+  const first = row("광진구");
+  const second = {...first, area_group: 85};
+  const unmatched = {...first, complex_id: first.complex_id + " 신규"};
+  const item = {households: 206, parking: 1.08, station: ["역", "9호선", 412, 37.5, 126.96], schools: []};
   const seen = [];
   t.mock.method(globalThis, "fetch", async url => {
     seen.push(url);
     if (url === "/api/districts") return reflect(districts);
-    if (url.startsWith("/metadata/")) return reflect([{...existing, name: "이전 이름", latitude: null, longitude: null}]);
-    const current = {...existing, name: "현재 이름", latitude: 37.55, longitude: 127.07};
-    if (url.includes("live_only=true")) return reflect([current, added]);
-    return reflect([current, {...added, address: "서울 광진구 신규", latitude: 37.56, longitude: 127.08, marker_price_manwon: 100000}]);
+    if (isFacilities(url)) return reflect({sources, items: {[first.complex_id]: item}});
+    return reflect([first, second, unmatched]);
   });
-  const {readHomes} = await fresh("daily-coordinates");
-  const [existingHome, newHome] = await readHomes(["광진구"]);
-  assert.equal(existingHome.latitude, 37.55);
-  assert.equal(existingHome.name, "현재 이름");
-  assert.equal(newHome.longitude, 127.08);
-  assert.equal(newHome.marker_price_manwon, 100000);
-  assert.ok(seen.some(url => url.startsWith("/api/complexes?") && !url.includes("live_only")));
+  const {readHomes} = await fresh("merge");
+  assert.deepEqual(await readHomes(["광진구"]), [
+    {...first, facilities: item, facility_sources: sources},
+    {...second, facilities: item, facility_sources: sources},
+    {...unmatched, facility_sources: sources},
+  ]);
+  assert.deepEqual(seen.slice(1).map(decodeURIComponent).sort(), [
+    "/api/complexes?include_sort=true&district=광진구",
+    "/api/facilities?district=광진구",
+  ]);
+});
+
+test("a failed or unexpected facility answer keeps the list", async t => {
+  const answers = {
+    "http-error": () => new Response(null, {status: 500}),
+    "network-error": () => Promise.reject(new TypeError("fetch failed")),
+    "not-json": () => new Response("<!doctype html>"),
+    "old-server": () => reflect({detail: "Not Found"}),
+    "empty-tables": () => reflect(noFacilities),
+  };
+  for (const [name, answer] of Object.entries(answers)) {
+    const mock = t.mock.method(globalThis, "fetch", async url => {
+      if (url === "/api/districts") return reflect(districts);
+      return isFacilities(url) ? answer() : reflect([row("광진구")]);
+    });
+    const {readHomes} = await fresh("facility-" + name);
+    assert.deepEqual(await readHomes(["광진구"]), [row("광진구")], name);
+    mock.mock.restore();
+  }
 });
 
 test("invalidateHomesCache forces a fresh fetch even before the 5-minute TTL expires", async t => {
   let calls = 0;
   t.mock.method(globalThis, "fetch", async url => {
     if (url === "/api/districts") return reflect(districts);
-    if (url.startsWith("/metadata/")) return reflect([{...row("광진구"), built: 2000}]);
+    if (isFacilities(url)) return reflect(noFacilities);
     calls += 1;
     return reflect([{...row("광진구"), marker_price_manwon: 100000 + calls}]);
   });
@@ -164,56 +185,22 @@ test("invalidateHomesCache forces a fresh fetch even before the 5-minute TTL exp
   assert.equal(refreshed[0].marker_price_manwon, 100002);
 });
 
-test("Pages worker forwards /api/metadata-revision to the API origin", async t => {
-  t.mock.method(globalThis, "fetch", async url => {
-    assert.equal(url.toString(), "https://api.example.com/api/metadata-revision");
-    return reflect({revision: "0123456789abcdef0123456789abcdef"});
-  });
-  const response = await worker.fetch(new Request("https://jipfit.example/api/metadata-revision"), {
-    API_ORIGIN: "https://api.example.com",
-  });
-  assert.deepEqual(await response.json(), {revision: "0123456789abcdef0123456789abcdef"});
-});
-
-test("fresh live address and coordinates override stale monthly metadata without redundant full fetch", async t => {
-  const existing = row("광진구");
-  const added = {
-    ...existing,
-    complex_id: existing.complex_id + " 신규",
-    address: "서울특별시 광진구 구의동 99",
-    built: 2024,
-    latitude: 37.56,
-    longitude: 127.08,
-  };
+test("Pages worker forwards /api/facilities and no longer the metadata revision", async t => {
   const seen = [];
   t.mock.method(globalThis, "fetch", async url => {
-    seen.push(url);
-    if (url === "/api/districts") return reflect(districts);
-    if (url.startsWith("/metadata/")) {
-      return reflect([{
-        ...existing,
-        address: "서울특별시 광진구 구의동 1",
-        built: 1995,
-        latitude: 37.50,
-        longitude: 127.00,
-        facilities: {households: 500},
-      }]);
-    }
-    return reflect([
-      {...existing, address: "서울특별시 광진구 구의동 2", built: 1997, latitude: 37.55, longitude: 127.07},
-      added,
-    ]);
+    seen.push(url.toString());
+    return reflect(noFacilities);
   });
-  const {readHomes} = await fresh("live-address-consistent");
-  const [updated, newlyAdded] = await readHomes(["광진구"]);
-  assert.equal(updated.address, "서울특별시 광진구 구의동 2");
-  assert.equal(updated.built, 1997);
-  assert.equal(updated.latitude, 37.55);
-  assert.equal(updated.longitude, 127.07);
-  assert.deepEqual(updated.facilities, {households: 500});
-  assert.equal(newlyAdded.address, "서울특별시 광진구 구의동 99");
-  assert.equal(newlyAdded.built, 2024);
-  assert.ok(!seen.some(url => url.startsWith("/api/complexes?") && !url.includes("live_only")));
+  const env = {API_ORIGIN: "https://api.example.com"};
+  const response = await worker.fetch(
+    new Request("https://jipfit.example/api/facilities?district=%EA%B4%91%EC%A7%84%EA%B5%AC"), env);
+  assert.deepEqual(await response.json(), noFacilities);
+  assert.deepEqual(seen, ["https://api.example.com/api/facilities?district=%EA%B4%91%EC%A7%84%EA%B5%AC"]);
+  const removed = await worker.fetch(new Request("https://jipfit.example/api/metadata-revision"), env);
+  assert.equal(removed.status, 404);
+  const post = await worker.fetch(new Request("https://jipfit.example/api/facilities", {method: "POST"}), env);
+  assert.equal(post.status, 405);
+  assert.equal(seen.length, 1);
 });
 
 test("common map positioning excludes confirmed demolished or unpositioned complexes across markers and clusters", () => {
@@ -274,49 +261,17 @@ test("common map positioning excludes confirmed demolished or unpositioned compl
   assert.equal(clustered.some(pin => pin.complex_id === demolishedComplex.complex_id), false);
 });
 
-test("live NULL coordinates and demolition_confirmed override stale static JSON metadata", async t => {
-  const addrCleared = {
-    complex_id: "서울특별시 광진구 구의동|631-1|주소변경",
-    area_group: 85,
-  };
-  const demolished = {
-    complex_id: "서울특별시 광진구 구의동|100|멸실단지",
-    area_group: 85,
-  };
-
-  // Direct unit check on mergeHomeRow
-  const mergedCleared = mergeHomeRow(
-    {...addrCleared, address: "서울특별시 광진구 구의동 631-1", latitude: 37.53, longitude: 127.09, demolition_confirmed: false},
-    {...addrCleared, address: "서울특별시 광진구 구의동 631-2", latitude: null, longitude: null, demolition_confirmed: false},
-  );
-  assert.equal(mergedCleared.latitude, null);
-  assert.equal(mergedCleared.longitude, null);
-
-  const mergedDemolished = mergeHomeRow(
-    {...demolished, address: "서울특별시 광진구 구의동 100", latitude: 37.54, longitude: 127.08},
-    {...demolished, address: "서울특별시 광진구 구의동 100", latitude: 37.54, longitude: 127.08, demolition_confirmed: true},
-  );
-  assert.equal(mergedDemolished.demolition_confirmed, true);
-
+test("NULL coordinates and confirmed demolitions from the API stay off the map", async t => {
+  const addrCleared = {complex_id: "서울특별시 광진구 구의동|631-1|주소변경", area_group: 85,
+    latitude: null, longitude: null, demolition_confirmed: false};
+  const demolished = {complex_id: "서울특별시 광진구 구의동|100|멸실단지", area_group: 85,
+    latitude: 37.54, longitude: 127.08, demolition_confirmed: true};
   t.mock.method(globalThis, "fetch", async url => {
     if (url === "/api/districts") return reflect(districts);
-    if (url.startsWith("/metadata/")) {
-      return reflect([
-        {...addrCleared, address: "서울특별시 광진구 구의동 631-1", built: 1997, latitude: 37.53, longitude: 127.09},
-        {...demolished, address: "서울특별시 광진구 구의동 100", built: 1988, latitude: 37.54, longitude: 127.08, demolition_confirmed: false},
-      ]);
-    }
-    return reflect([
-      {...addrCleared, address: "서울특별시 광진구 구의동 631-2", built: 1997, latitude: null, longitude: null, marker_price_manwon: 150000, trade_count: 10, demolition_confirmed: false},
-      {...demolished, address: "서울특별시 광진구 구의동 100", built: 1988, latitude: 37.54, longitude: 127.08, marker_price_manwon: 140000, trade_count: 8, demolition_confirmed: true},
-    ]);
+    return reflect(isFacilities(url) ? noFacilities : [addrCleared, demolished]);
   });
-
-  const {readHomes} = await fresh("stale-static-override");
+  const {readHomes} = await fresh("live-values");
   const rows = await readHomes(["광진구"]);
-  const complexes = rows.map(r => ({...r, groups: [r]}));
-  assert.equal(rows[0].latitude, null);
-  assert.equal(rows[0].longitude, null);
-  assert.equal(rows[1].demolition_confirmed, true);
-  assert.deepEqual(positionedComplexes(complexes), []);
+  assert.deepEqual(rows, [addrCleared, demolished]);
+  assert.deepEqual(positionedComplexes(rows.map(r => ({...r, groups: [r]}))), []);
 });
