@@ -391,3 +391,44 @@ UPDATE complexes c SET latitude=NULL, longitude=NULL
 FROM complex_geocode_pending p
 WHERE c.complex_id=p.complex_id
   AND (c.latitude IS NOT NULL OR c.longitude IS NOT NULL);
+
+-- Public facility catalogs (facilities.py). Each source is replaced as a whole.
+CREATE TABLE IF NOT EXISTS facility_apartments (
+    gu text NOT NULL, dong text NOT NULL, name text NOT NULL,
+    latitude double precision NOT NULL, longitude double precision NOT NULL,
+    households integer, parking integer
+);
+-- seq is the row order of the source file or API response (from 0); equal distances keep the earlier row.
+CREATE TABLE IF NOT EXISTS facility_stations (
+    seq integer PRIMARY KEY,
+    name text NOT NULL, lines text NOT NULL,
+    latitude double precision NOT NULL, longitude double precision NOT NULL
+);
+CREATE TABLE IF NOT EXISTS facility_schools (
+    seq integer PRIMARY KEY,
+    name text NOT NULL, level text NOT NULL, address text NOT NULL,
+    latitude double precision NOT NULL, longitude double precision NOT NULL
+);
+-- NEIS has no coordinates: only schools matching name, level and road address take these.
+CREATE TABLE IF NOT EXISTS facility_school_anchors (
+    name text NOT NULL, level text NOT NULL, address text NOT NULL,
+    latitude double precision NOT NULL, longitude double precision NOT NULL,
+    PRIMARY KEY (name, level, address)
+);
+-- State per source, shown as the data basis. refreshed_month ('YYYY-MM') stays NULL for the bundled seed.
+CREATE TABLE IF NOT EXISTS facility_sources (
+    source text PRIMARY KEY CHECK (source IN ('apartments', 'stations', 'schools')),
+    label text NOT NULL,
+    row_count integer NOT NULL,
+    refreshed_month text,
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+-- Derived per complex from the catalogs and complexes; rebuilt by facilities.sync_complex_facilities().
+CREATE TABLE IF NOT EXISTS complex_facilities (
+    complex_id text PRIMARY KEY REFERENCES complexes(complex_id),
+    households integer,
+    parking double precision,       -- parking spaces per household; verified zero is 0, unknown is NULL
+    station jsonb,                  -- [name, lines, metres, latitude, longitude] or NULL
+    schools jsonb,                  -- [[name, level, metres, latitude, longitude], ...] or NULL
+    computed_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);

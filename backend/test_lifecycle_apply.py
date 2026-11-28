@@ -410,10 +410,11 @@ class DeleteTests(unittest.TestCase):
             self.assertEqual(dc.delete(db, self.targets, self.root / "a.json", TODAY), {})
         self.assertEqual(db.queries("DELETE FROM"), [])
 
-    def archive_file(self):
+    def archive_file(self, without=(), extra=()):
         path = self.root / "archive.json"
+        names = [name for name, _ in dc.TABLES if name not in without] + list(extra)
         path.write_text(json.dumps({"version": 1, "targets": self.targets,
-                                    "tables": {name: [f'{{"t": "{name}"}}'] for name, _ in dc.TABLES}}),
+                                    "tables": {name: [f'{{"t": "{name}"}}'] for name in names}}),
                         encoding="utf-8")
         return path
 
@@ -426,6 +427,23 @@ class DeleteTests(unittest.TestCase):
         for query, _ in inserts:
             self.assertEqual("OVERRIDING SYSTEM VALUE" in query, query.split()[2] in dc.IDENTITY_TABLES)
         self.assertTrue(db.queries("DELETE FROM complex_exclusions"))
+
+    def test_an_archive_written_before_the_facility_table_is_still_restored(self):
+        db = ScriptedDB()
+        with patch("builtins.print"):
+            dc.restore(db, self.archive_file(without=("complex_facilities",)))
+        self.assertEqual([q.split()[2] for q, _ in db.queries("INSERT INTO")],
+                         [name for name, _ in reversed(dc.TABLES) if name != "complex_facilities"])
+        self.assertTrue(db.queries("DELETE FROM complex_exclusions"))
+
+    def test_any_other_difference_in_the_archived_tables_is_refused(self):
+        for difference in ({"without": ("trades",)}, {"without": ("complex_facilities", "trades")},
+                           {"extra": ("app_users",)},
+                           {"without": ("complex_facilities",), "extra": ("app_users",)}):
+            db = ScriptedDB()
+            with self.subTest(**difference), self.assertRaises(ValueError):
+                dc.restore(db, self.archive_file(**difference))
+            self.assertEqual(db.log, [])
 
     def test_restore_refuses_existing_complexes_and_foreign_files(self):
         db = ScriptedDB([("SELECT complex_id FROM complexes", [(self.IDS[0],)])])

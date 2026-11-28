@@ -2583,6 +2583,7 @@ class SqlPlaceholderTest(unittest.TestCase):
         "automatic_metadata.py",
         "complex_list.py",
         "delete_complexes.py",
+        "facilities.py",
         "train_seoul.py",
         "features.py",
         "fetch_macro.py",
