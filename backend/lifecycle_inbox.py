@@ -1,10 +1,11 @@
-"""Apply the monthly judgment bundles that jipfit_lifecycle publishes into the inbox folder.
+"""Apply the monthly judgment bundles that the monthly check (lifecycle_check) writes into its bundle folder.
 
 Each folder holds manifest.json and results.jsonl. Judgments go through
 lifecycle_results.apply_lifecycle_results, one transaction per district together with the derived values,
 so running a bundle again after a failure only repeats judgments that become noop. A new demolition that a
 stored contract contradicts is applied as a hold instead. A bundle is recorded in complex_lifecycle_batches
-once every district is done, or as rejected when its files are malformed.
+once every district is done, or as rejected when its files are malformed. Recording a bundle that carries
+fingerprints.json also takes over the fingerprints and closes that month's run, in the same transaction.
 """
 from collections import Counter, defaultdict
 from datetime import date
@@ -17,6 +18,7 @@ from psycopg.types.json import Jsonb
 
 from automatic_metadata import KAPT_LOCK_BASE
 from districts import DISTRICTS
+from lifecycle_check import store
 from lifecycle_results import (
     DISTRICT_CODES, LifecycleResult, apply_lifecycle_results, effective_date_conflicts, sync_derived,
 )
@@ -150,11 +152,22 @@ def apply_bundle(db, results, today):
     return dict(summary)
 
 
-def record(db, batch, checksum, status, summary):
-    db.execute("""
-        INSERT INTO complex_lifecycle_batches(batch, checksum, status, summary)
-        VALUES (%s, %s, %s, %s) ON CONFLICT (batch) DO NOTHING
-    """, (batch, checksum, status, Jsonb(summary)))
+def read_fingerprints(folder):
+    """The fingerprint document of a monthly bundle; other bundles carry none."""
+    path = folder / "fingerprints.json"
+    return store.parse_fingerprints(path.read_bytes()) if path.is_file() else None
+
+
+def record(db, batch, checksum, status, summary, fingerprints=None):
+    """Record a bundle; an applied monthly one moves the fingerprints and closes its run in the same step."""
+    with db.transaction():
+        db.execute("""
+            INSERT INTO complex_lifecycle_batches(batch, checksum, status, summary)
+            VALUES (%s, %s, %s, %s) ON CONFLICT (batch) DO NOTHING
+        """, (batch, checksum, status, Jsonb(summary)))
+        if status == "applied" and fingerprints is not None:
+            store.save_fingerprints(db, fingerprints, batch)
+            store.mark_applied(db, batch)
 
 
 def apply_inbox(root, today):
@@ -182,6 +195,7 @@ def apply_inbox(root, today):
                     continue
                 try:
                     as_of, results = parse_bundle(batch, *files)
+                    fingerprints = read_fingerprints(folder)
                 except ValueError as error:
                     record(db, batch, checksum, "rejected", {"reason": str(error)})
                     print(f"Lifecycle {batch}: rejected ({error})", flush=True)
@@ -190,7 +204,7 @@ def apply_inbox(root, today):
                     print(f"Lifecycle {batch}: 기준일 {as_of}까지 반영을 미룹니다.", flush=True)
                     continue
                 summary = apply_bundle(db, results, today)
-                record(db, batch, checksum, "applied", summary)
+                record(db, batch, checksum, "applied", summary, fingerprints)
             except (OSError, psycopg.Error) as error:
                 print(f"Lifecycle {batch}: deferred ({type(error).__name__})", flush=True)
                 return [batch]

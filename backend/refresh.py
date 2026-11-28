@@ -20,6 +20,7 @@ import psycopg
 from automatic_metadata import address_key, refresh_automatic_metadata
 from districts import DISTRICTS, GWANGJIN
 from features import build_inputs, input_month_range, is_in_input_window
+from lifecycle_check import run_month
 from lifecycle_inbox import apply_inbox
 from lifecycle_results import empty_lifecycle_provider
 from molit import fetch_month
@@ -1369,8 +1370,19 @@ def refresh_many(districts, *, now=None):
     return failed
 
 
+def run_lifecycle_month(today):
+    """The monthly existence check when JIPFIT_LIFECYCLE_AUTO is 1; failures join the monthly retry."""
+    if os.environ.get("JIPFIT_LIFECYCLE_AUTO") != "1":
+        return []
+    try:
+        return run_month(today)
+    except Exception as exc:
+        print(f"Lifecycle month deferred ({type(exc).__name__}).", flush=True)
+        return [f"lifecycle:{type(exc).__name__}"]
+
+
 def apply_lifecycle_inbox(today):
-    """Apply published lifecycle bundles when JIPFIT_LIFECYCLE_DIR is set; failures join the daily retry."""
+    """Apply unrecorded lifecycle bundles when JIPFIT_LIFECYCLE_DIR is set; failures join the daily retry."""
     root = os.environ.get("JIPFIT_LIFECYCLE_DIR")
     if not root:
         return []
@@ -1803,6 +1815,8 @@ def run_once(districts=None, *, metadata_dir=None, now=None, lifecycle_provider=
             apply_metadata(metadata_dir, slot_day)
         except Exception as exc:
             metadata_failed.append(f"verified-metadata ({type(exc).__name__})")
+    # After K-apt and the verified files, so the check reads the corrected names and addresses.
+    metadata_failed.extend(run_lifecycle_month(slot_day))
     metadata_failed.extend(apply_lifecycle_inbox(slot_day))
 
     errors = []
@@ -1859,21 +1873,28 @@ def main():
             wait = run_slot(daily_worker_name, job, store=store, max_retries=3, retry_delay=600)
             clock.sleep(max(1, wait))
 
-    # 2. 월간 메타데이터·존치판정·검증배치 갱신 전용 반복문
+    # 2. 월간 메타데이터·검증배치·멸실·재건축 판정 전용 반복문
     def metadata_worker():
         print("Metadata refresh worker started", flush=True)
 
         def job(slot_day):
-            failed = list(
-                refresh_automatic_metadata(
-                    slot_day,
-                    districts,
-                    include_geocode=False,
-                    lifecycle_provider=empty_lifecycle_provider,
-                ) or []
-            )
-            if args.metadata_dir:
-                apply_metadata(args.metadata_dir, slot_day)
+            failed = []
+            try:
+                failed.extend(
+                    refresh_automatic_metadata(
+                        slot_day,
+                        districts,
+                        include_geocode=False,
+                        lifecycle_provider=empty_lifecycle_provider,
+                    ) or []
+                )
+                if args.metadata_dir:
+                    apply_metadata(args.metadata_dir, slot_day)
+            except Exception as exc:
+                # The existence check below counts its own attempts, so it runs in every attempt of the slot.
+                failed.append(type(exc).__name__)
+                print(f"{metadata_worker_name} metadata step error: {type(exc).__name__}", flush=True)
+            failed.extend(run_lifecycle_month(slot_day))
             return failed
 
         while True:

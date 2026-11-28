@@ -11,13 +11,13 @@ preparing the idempotent schema is still committed. Back up the database with pg
 import argparse
 from collections import Counter
 from datetime import datetime
-from hashlib import sha256
 import json
 from pathlib import Path
 import re
 
 import psycopg
 
+from lifecycle_admin import correct  # --correct and lifecycle_admin.py resolve share one apply path.
 from lifecycle_results import (
     LifecycleResult, apply_lifecycle_results, effective_date_conflicts, sync_derived, training_exclusion_date,
 )
@@ -168,41 +168,6 @@ def run_apply(db, results, today, *, dry, allow_conflicts=False):
     print(f"metadata-revision {revision_before} -> {metadata_revision_text()}")
     print("정적 데이터는 export_public_json.py(배포 절차)를 다시 실행해야 갱신됩니다.")
     successor_report(db, results)
-    return summary
-
-
-def correct(db, complex_id, existence, evidence, today, *, dry):
-    """Replace one complex's confirmed judgment with a new result that names the one it corrects (3-2)."""
-    row = db.execute("""
-        SELECT result_key, existence, evidence FROM complex_lifecycle_state
-        WHERE complex_id = %s AND existence IS NOT NULL
-    """, (complex_id,)).fetchone()
-    if row is None:
-        raise SystemExit(f"정정할 확정 판정이 없습니다: {complex_id}")
-    current_key, current_existence, current_evidence = row
-    if (current_existence, current_evidence) == (existence, evidence.strip()):
-        print(f"이미 같은 판정입니다: {complex_id} ({existence})")
-        if not dry:
-            sync_derived(db, [complex_id], today)
-        return None
-    digest = sha256("|".join((current_key, existence, evidence)).encode("utf-8")).hexdigest()[:16]
-    result = LifecycleResult(
-        result_key=f"correction:{digest}:{complex_id}", complex_id=complex_id, existence=existence,
-        evidence=evidence, as_of=today.isoformat(), verifier_version="apply_lifecycle_baseline@manual",
-        correction_of=current_key,
-    )
-    print(f"{complex_id}: {current_existence} ({current_key}) -> {existence}")
-    if dry:
-        summary, quarantined = dry_run(db, [result], today)
-        print_summary(summary, quarantined)
-        print("dry-run: 데이터 변경 없음")
-        return summary
-    summary, quarantined = apply_each(db, [result], today)
-    print_summary(summary, quarantined)
-    if quarantined:
-        raise SystemExit("정정이 격리되었습니다.")
-    derived = sync_derived(db, [complex_id], today)
-    print(f"학습 제외 변경 {derived['changed']}건, 예측 재계산 예약 {', '.join(derived['republish']) or '없음'}")
     return summary
 
 

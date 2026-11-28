@@ -121,8 +121,9 @@ class InboxDB:
                 result_key=key, existence=existence, as_of=as_of, evidence=evidence, effective_date=effective)
             return Result()
         if q.startswith("UPDATE complexes c SET existence_status"):
+            confirmed_only = "s.existence IS NOT NULL" in q
             for cid in params[0]:
-                if cid in data["state"]:
+                if cid in data["state"] and (data["state"][cid]["existence"] or not confirmed_only):
                     data["status"][cid] = data["state"][cid]["existence"]
             return Result(rowcount=len(params[0]))
         if q.startswith("SELECT complex_id, result_key, existence, effective_date, evidence"):
@@ -198,7 +199,8 @@ class ApplyInboxTests(InboxCase):
         self.assertEqual(self.apply(), [])
         self.assertEqual(self.db.connects, [{"autocommit": True, "connect_timeout": 8}])
         self.assertEqual([p[0] for p in self.db.ran("pg_advisory_xact_lock(%s)")], [2_011_530, 2_011_680])
-        self.assertEqual(self.db.data["status"], {GURO: "present", GANGNAM: "demolished", GANGNAM_NEW: None})
+        # The complex that is only held keeps whatever status it had.
+        self.assertEqual(self.db.data["status"], {GURO: "present", GANGNAM: "demolished"})
         self.assertEqual(self.db.data["batches"]["monthly-20261228"][1:],
                          ("applied", {"applied": 2, "noop": 0, "pending": 1, "quarantined": 0, "skipped": 0,
                                       "conflicts": 0}))
@@ -453,15 +455,17 @@ class DailyWorkerTests(unittest.TestCase):
 
 
 class PackagingTests(unittest.TestCase):
-    def test_the_table_is_idempotent_and_the_updater_reads_the_inbox(self):
+    def test_the_table_is_idempotent_and_the_updater_reads_the_bundles(self):
         sql = (ROOT / "db/metadata_refresh.sql").read_text(encoding="utf-8")
         self.assertIn("CREATE TABLE IF NOT EXISTS complex_lifecycle_batches (", sql)
         self.assertIn("lifecycle_inbox.py", (ROOT / "Dockerfile").read_text(encoding="utf-8"))
         compose = (ROOT.parent / "compose.yaml").read_text(encoding="utf-8")
         updater = compose.split("\n  updater:")[1]
-        self.assertIn("JIPFIT_LIFECYCLE_DIR: /lifecycle", updater)
-        self.assertIn("./lifecycle-inbox:/lifecycle:ro", updater)
-        self.assertIn("/lifecycle-inbox/", (ROOT.parent / ".gitignore").read_text(encoding="utf-8").split())
+        self.assertIn("JIPFIT_LIFECYCLE_DIR: /lifecycle-data/batches", updater)
+        # No folder outside Jipfit feeds the updater any more.
+        self.assertNotIn("lifecycle-inbox", compose)
+        ignored = (ROOT.parent / ".gitignore").read_text(encoding="utf-8").split()
+        self.assertEqual(("/lifecycle-data/" in ignored, "/lifecycle-inbox/" in ignored), (True, False))
 
     def test_the_monthly_provider_stays_empty(self):
         source = (ROOT / "refresh.py").read_text(encoding="utf-8")

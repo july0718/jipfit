@@ -351,6 +351,7 @@ def sync_derived(db, complex_ids, today):
             SET existence_status = CASE s.existence WHEN 'present' THEN '현존' WHEN 'demolished' THEN '멸실' END
             FROM complex_lifecycle_state s
             WHERE c.complex_id = s.complex_id AND c.complex_id = ANY(%s::text[])
+                  AND s.existence IS NOT NULL  -- A hold without a confirmed judgment leaves the column as it was.
         """, (ids,)).rowcount
         states = db.execute("""
             SELECT complex_id, result_key, existence, effective_date, evidence
