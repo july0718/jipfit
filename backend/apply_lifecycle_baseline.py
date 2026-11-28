@@ -10,28 +10,23 @@ preparing the idempotent schema is still committed. Back up the database with pg
 """
 import argparse
 from collections import Counter
-from datetime import date, datetime
-from hashlib import sha256
+from datetime import datetime
 import json
 from pathlib import Path
 import re
 
-import pandas as pd
 import psycopg
 
-from districts import DISTRICTS
-from features import input_month_range
-from lifecycle_results import LifecycleResult, apply_lifecycle_results
+from lifecycle_admin import correct  # --correct and lifecycle_admin.py resolve share one apply path.
+from lifecycle_results import (
+    LifecycleResult, apply_lifecycle_results, effective_date_conflicts, sync_derived, training_exclusion_date,
+)
 from refresh import KST, ensure_schema
 
-# jipfit_lifecycle writes these two fields first, ahead of any free text.
-TRADE_CAUTION = re.compile(r"^basis=[^;]*; trade_caution_from=(\d{4}-\d{2}-\d{2})(?:;|$)")
 SUCCESSOR_NAME = re.compile(r"; successor_name=([^;]*); note=")
-EXCLUSION_PREFIX = "lifecycle:"
 SUMMARY_KEYS = ("applied", "noop", "pending", "quarantined")
 # A dry run holds one advisory lock per record until rollback, so it rolls back in small batches.
 DRY_RUN_BATCH = 500
-DISTRICT_CODES = {name: code for code, name in DISTRICTS.items()}
 
 
 def read_results(path):
@@ -53,14 +48,6 @@ def read_results(path):
     if not results:
         raise ValueError(f"{path}: 결과가 없습니다")
     return results
-
-
-def training_exclusion_date(existence, effective_date, evidence):
-    """The first contract date to leave out of model inputs: gone, no effective date, caution date recorded."""
-    if existence != "demolished" or effective_date is not None:
-        return None
-    matched = TRADE_CAUTION.match(evidence or "")
-    return date.fromisoformat(matched.group(1)) if matched else None
 
 
 def apply_each(db, results, today):
@@ -91,73 +78,6 @@ def dry_run(db, results, today):
     return dict(summary), quarantined
 
 
-def request_republish(db, complex_ids_from, today):
-    """Queue a district forecast rebuild when an exclusion change touches the current input window."""
-    first, last = input_month_range(pd.Period(today, freq="M"))
-    start, end = first.start_time.date(), (last + 1).start_time.date()
-    queued = set()
-    for cid, since in complex_ids_from.items():
-        parts = cid.split(" ")
-        code = DISTRICT_CODES.get(parts[1]) if len(parts) > 1 else None
-        if not code or code in queued or since >= end:
-            continue
-        if db.execute("""
-            SELECT 1 FROM trades
-            WHERE complex_id = %s AND NOT is_cancelled AND contract_date >= %s AND contract_date < %s LIMIT 1
-        """, (cid, max(since, start), end)).fetchone():
-            db.execute("""
-                INSERT INTO refresh_publish_pending(district, day, added, removed)
-                VALUES (%s, %s, 0, 0) ON CONFLICT (district, day) DO NOTHING
-            """, (code, today))
-            queued.add(code)
-    return sorted(queued)
-
-
-def sync_derived(db, complex_ids, today):
-    """Rebuild the existence_status copy and training exclusions of these complexes from confirmed state."""
-    ids = sorted(set(complex_ids))
-    with db.transaction():
-        copied = db.execute("""
-            UPDATE complexes c
-            SET existence_status = CASE s.existence WHEN 'present' THEN '현존' WHEN 'demolished' THEN '멸실' END
-            FROM complex_lifecycle_state s
-            WHERE c.complex_id = s.complex_id AND c.complex_id = ANY(%s::text[])
-        """, (ids,)).rowcount
-        states = db.execute("""
-            SELECT complex_id, result_key, existence, effective_date, evidence
-            FROM complex_lifecycle_state WHERE complex_id = ANY(%s::text[]) ORDER BY complex_id
-        """, (ids,)).fetchall()
-        existing = {row[0]: (row[1], row[2]) for row in db.execute("""
-            SELECT complex_id, exclude_from, reason FROM complex_training_exclusions
-            WHERE complex_id = ANY(%s::text[])
-        """, (ids,)).fetchall()}
-        changed = {}
-        for cid, result_key, existence, effective_date, evidence in states:
-            since = training_exclusion_date(existence, effective_date, evidence)
-            old_since, old_reason = existing.get(cid, (None, ""))
-            ours = old_reason.startswith(EXCLUSION_PREFIX)
-            if old_since is not None and not ours:
-                continue  # An exclusion entered by hand is never overwritten or removed here.
-            if since is not None:
-                db.execute("""
-                    INSERT INTO complex_training_exclusions(complex_id, exclude_from, reason)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (complex_id) DO UPDATE
-                    SET exclude_from = EXCLUDED.exclude_from, reason = EXCLUDED.reason
-                """, (cid, since, EXCLUSION_PREFIX + result_key))
-                if since != old_since:
-                    changed[cid] = min(since, old_since or since)
-            elif ours:
-                db.execute("DELETE FROM complex_training_exclusions WHERE complex_id = %s", (cid,))
-                changed[cid] = old_since
-        republish = request_republish(db, changed, today)
-        total = db.execute("""
-            SELECT count(*) FROM complex_training_exclusions WHERE complex_id = ANY(%s::text[])
-        """, (ids,)).fetchone()[0]
-    return {"existence_status": copied, "training_exclusions": total, "changed": len(changed),
-            "republish": republish}
-
-
 def marker_ids(db):
     """Complexes the map can draw: not confirmed demolished, valid coordinates and an active priced trade."""
     return {row[0] for row in db.execute("""
@@ -172,28 +92,6 @@ def marker_ids(db):
 
 def pending_revisions(db):
     return db.execute("SELECT count(*) FROM refresh_revision_pending").fetchone()[0]
-
-
-def effective_date_conflicts(db, results):
-    """Stored active contracts on or after a result's effective date; daily rechecks would hold them."""
-    dated = []
-    for result in results:
-        if result.existence != "demolished" or result.effective_date is None:
-            continue
-        try:
-            dated.append((result.complex_id, date.fromisoformat(str(result.effective_date))))
-        except ValueError:
-            pass  # apply_lifecycle_results quarantines the record.
-    if not dated:
-        return []
-    ids, days = zip(*dated)
-    return db.execute("""
-        SELECT v.complex_id, v.effective_date, count(*), max(t.contract_date)
-        FROM unnest(%s::text[], %s::date[]) AS v(complex_id, effective_date)
-        JOIN trades t ON t.complex_id = v.complex_id AND NOT t.is_cancelled
-                     AND t.contract_date >= v.effective_date
-        GROUP BY v.complex_id, v.effective_date ORDER BY v.complex_id
-    """, (list(ids), list(days))).fetchall()
 
 
 def successor_report(db, results):
@@ -270,41 +168,6 @@ def run_apply(db, results, today, *, dry, allow_conflicts=False):
     print(f"metadata-revision {revision_before} -> {metadata_revision_text()}")
     print("정적 데이터는 export_public_json.py(배포 절차)를 다시 실행해야 갱신됩니다.")
     successor_report(db, results)
-    return summary
-
-
-def correct(db, complex_id, existence, evidence, today, *, dry):
-    """Replace one complex's confirmed judgment with a new result that names the one it corrects (3-2)."""
-    row = db.execute("""
-        SELECT result_key, existence, evidence FROM complex_lifecycle_state
-        WHERE complex_id = %s AND existence IS NOT NULL
-    """, (complex_id,)).fetchone()
-    if row is None:
-        raise SystemExit(f"정정할 확정 판정이 없습니다: {complex_id}")
-    current_key, current_existence, current_evidence = row
-    if (current_existence, current_evidence) == (existence, evidence.strip()):
-        print(f"이미 같은 판정입니다: {complex_id} ({existence})")
-        if not dry:
-            sync_derived(db, [complex_id], today)
-        return None
-    digest = sha256("|".join((current_key, existence, evidence)).encode("utf-8")).hexdigest()[:16]
-    result = LifecycleResult(
-        result_key=f"correction:{digest}:{complex_id}", complex_id=complex_id, existence=existence,
-        evidence=evidence, as_of=today.isoformat(), verifier_version="apply_lifecycle_baseline@manual",
-        correction_of=current_key,
-    )
-    print(f"{complex_id}: {current_existence} ({current_key}) -> {existence}")
-    if dry:
-        summary, quarantined = dry_run(db, [result], today)
-        print_summary(summary, quarantined)
-        print("dry-run: 데이터 변경 없음")
-        return summary
-    summary, quarantined = apply_each(db, [result], today)
-    print_summary(summary, quarantined)
-    if quarantined:
-        raise SystemExit("정정이 격리되었습니다.")
-    derived = sync_derived(db, [complex_id], today)
-    print(f"학습 제외 변경 {derived['changed']}건, 예측 재계산 예약 {', '.join(derived['republish']) or '없음'}")
     return summary
 
 

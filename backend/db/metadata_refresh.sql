@@ -216,6 +216,38 @@ ALTER TABLE complex_lifecycle_quarantine ALTER COLUMN payload_digest SET NOT NUL
 CREATE UNIQUE INDEX IF NOT EXISTS complex_lifecycle_quarantine_digest_idx
 ON complex_lifecycle_quarantine (payload_digest);
 
+-- Monthly judgment bundles taken from the lifecycle inbox; a recorded batch is never applied again.
+CREATE TABLE IF NOT EXISTS complex_lifecycle_batches (
+    batch text PRIMARY KEY,
+    checksum text NOT NULL,
+    status text NOT NULL CHECK (status IN ('applied', 'rejected')),
+    summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+    recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+-- One monthly existence check per month: collecting (retried), judged (bundle written) and applied.
+CREATE TABLE IF NOT EXISTS complex_lifecycle_runs (
+    month text PRIMARY KEY,                -- 'YYYY-MM'
+    status text NOT NULL CHECK (status IN ('collecting', 'judged', 'applied', 'disabled')),
+    as_of date,
+    batch text,
+    attempts integer NOT NULL DEFAULT 0,
+    remaining_calls integer,
+    summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+    last_error text,
+    started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+-- The register records each parcel's judgment was last based on; only new records reopen a standing complex.
+CREATE TABLE IF NOT EXISTS complex_lifecycle_fingerprints (
+    parcel_key text PRIMARY KEY,
+    as_of date NOT NULL,
+    digest text NOT NULL,
+    records jsonb NOT NULL,
+    batch text                             -- The bundle that left this record; the seed is 'seed-20261126'.
+);
+
 -- Contracts on or after exclude_from stay in trades but are left out of model training and forecast inputs.
 CREATE TABLE IF NOT EXISTS complex_training_exclusions (
     complex_id text PRIMARY KEY REFERENCES complexes(complex_id),

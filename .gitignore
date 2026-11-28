@@ -11,6 +11,9 @@ frontend/public/data/
 # Local verified metadata and evidence batches
 /verified-metadata/
 
+# Monthly existence check: reference data, register caches, judgment bundles and reports
+/lifecycle-data/
+
 # Raw, per-complex holdout results must stay local. Publish only aggregated JSON.
 /backend/holdout-output/
 

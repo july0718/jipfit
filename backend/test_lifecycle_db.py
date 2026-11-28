@@ -6,10 +6,14 @@ dbname=postgres". The test creates its own database, works only inside it and dr
 from collections import Counter
 from datetime import date
 from decimal import Decimal
+from hashlib import sha256
 import importlib.util
 import json
 import os
 from pathlib import Path
+import re
+import shutil
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -22,6 +26,24 @@ GONE = "서울특별시 구로구 구로동|1|옛단지"
 DATED = "서울특별시 구로구 구로동|2|말소단지"
 STAYS = "서울특별시 구로구 구로동|3|현존단지"
 VILLA = "서울특별시 구로구 구로동|4|빌라"
+
+
+def backup_rows(dump, table):
+    """One table of a pg_dump backup, read as jipfit_lifecycle@d86dcdf did (dump_rows and copy_value)."""
+    escapes = {"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}
+
+    def value(field):
+        if field == "\\N":
+            return None
+        return re.sub(r"\\(.)", lambda found: escapes.get(found[1], found[1]), field)
+
+    text = subprocess.run(["pg_restore", "--data-only", "--table", table, "--file", "-", str(dump)], check=True,
+                          capture_output=True).stdout.decode("utf-8").replace("\r\n", "\n")
+    lines = text.split("\n")
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"COPY public.{table} ("))
+    columns = lines[start].split("(", 1)[1].split(") FROM stdin;", 1)[0].split(", ")
+    rows = lines[start + 1:lines.index("\\.", start)]
+    return [dict(zip(columns, map(value, row.split("\t")), strict=True)) for row in rows]
 
 
 def real_psycopg():
@@ -43,7 +65,7 @@ class LifecycleDatabaseTests(unittest.TestCase):
         admin.execute(f"CREATE DATABASE {self.name} TEMPLATE template0 ENCODING 'UTF8'")
         self.addCleanup(admin.close)
         self.addCleanup(admin.execute, f"DROP DATABASE {self.name} WITH (FORCE)")
-        conninfo = f"{DSN} dbname={self.name}"
+        conninfo = self.conninfo = f"{DSN} dbname={self.name}"
         self.db = psycopg.connect(conninfo, autocommit=True)
         self.addCleanup(self.db.close)
         schema = (ROOT / "db/init.sql").read_text(encoding="utf-8").split("INSERT INTO")[0]
@@ -120,6 +142,257 @@ class LifecycleDatabaseTests(unittest.TestCase):
         self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_results WHERE complex_id=%s", (GONE,)), 2)
         self.assertEqual(self.value("SELECT count(*) FROM complex_training_exclusions"), 0)
         self.assertEqual(self.value("SELECT existence_status FROM complexes WHERE complex_id=%s", (GONE,)), "현존")
+
+    def publish_bundle(self, root, day, results):
+        batch = "monthly-" + day.replace("-", "")
+        folder = root / batch
+        folder.mkdir()
+        body = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in results).encode("utf-8")
+        (folder / "results.jsonl").write_bytes(body)
+        (folder / "manifest.json").write_text(json.dumps(
+            {"batch": batch, "as_of": day, "verifier_version": "v", "results": len(results),
+             "sha256": sha256(body).hexdigest(), "counts": {}}), encoding="utf-8")
+
+    def test_inbox_applies_monthly_bundles_and_keeps_derived_values(self):
+        import apply_lifecycle_baseline as apply
+        import lifecycle_inbox
+
+        def monthly(cid, existence, **extra):
+            return {"result_key": f"monthly-20261228:{cid}", "complex_id": cid, "existence": existence,
+                    "evidence": "basis=t; note=n", "as_of": "2026-12-28", "verifier_version": "v", **extra}
+
+        def exclusion():
+            return self.db.execute("SELECT complex_id, exclude_from FROM complex_training_exclusions").fetchall()
+
+        with patch("builtins.print"):
+            apply.run_apply(self.db, self.results(), TODAY, dry=False)
+        self.db.execute("DELETE FROM refresh_publish_pending")
+        connect = lifecycle_inbox.psycopg.connect
+        link = {"successor_id": STAYS, "successor_status": "linked"}
+        with TemporaryDirectory() as temp, patch("builtins.print"), patch.object(
+                lifecycle_inbox.psycopg, "connect", lambda **kw: connect(self.conninfo, **kw)):
+            root = Path(temp)
+            self.publish_bundle(root, "2026-12-28", [
+                # Successor links repeat the effective date and the caution date of the current judgment.
+                monthly(GONE, "demolished", evidence="basis=t; trade_caution_from=2026-05-01; note=linked", **link),
+                monthly(DATED, "demolished", effective_date="2026-07-01", effective_precision="day", **link),
+                monthly(VILLA, "pending", hold_code="범위미확인"),
+                monthly("서울특별시 구로구 구로동|9|삭제된단지", "present")])
+            (root / "monthly-20261227").mkdir()
+            self.assertEqual(lifecycle_inbox.apply_inbox(root, date(2026, 12, 29)), [])
+            self.assertEqual(lifecycle_inbox.apply_inbox(root, date(2026, 12, 29)), [])
+        batches = {row[0]: row[1:] for row in self.db.execute(
+            "SELECT batch, status, summary FROM complex_lifecycle_batches").fetchall()}
+        self.assertEqual(batches["monthly-20261227"][0], "rejected")
+        self.assertEqual(batches["monthly-20261228"], (
+            "applied", {"applied": 2, "noop": 0, "pending": 1, "quarantined": 0, "skipped": 1, "conflicts": 0}))
+        self.assertEqual(exclusion(), [(GONE, date(2026, 5, 1))])
+        self.assertEqual(self.value("SELECT effective_date FROM complex_lifecycle_state WHERE complex_id=%s",
+                                    (DATED,)), date(2026, 7, 1))
+        self.assertEqual(self.value("SELECT count(*) FROM refresh_publish_pending"), 0)
+        self.assertEqual(self.value("SELECT pending_hold_code FROM complex_lifecycle_state WHERE complex_id=%s",
+                                    (VILLA,)), "범위미확인")
+        self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_results WHERE successor_id=%s",
+                                    (STAYS,)), 2)
+        self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_quarantine"), 0)
+
+        # STAYS has a contract on 2026-06-10, after the new effective date, so the demolition is held.
+        late = {**monthly(STAYS, "demolished", effective_date="2026-06-01", effective_precision="day"),
+                "result_key": f"monthly-20261229:{STAYS}", "as_of": "2026-12-29"}
+        with TemporaryDirectory() as temp, patch("builtins.print"), patch.object(
+                lifecycle_inbox.psycopg, "connect", lambda **kw: connect(self.conninfo, **kw)):
+            self.publish_bundle(Path(temp), "2026-12-29", [late])
+            self.assertEqual(lifecycle_inbox.apply_inbox(temp, date(2026, 12, 29)), [])
+        self.assertEqual(self.db.execute(
+            "SELECT existence, pending_hold_code, pending_result_key FROM complex_lifecycle_state "
+            "WHERE complex_id=%s", (STAYS,)).fetchone(),
+            ("present", "말소후거래", f"monthly-20261229:{STAYS}:conflict"))
+        self.assertEqual(self.value("SELECT existence_status FROM complexes WHERE complex_id=%s", (STAYS,)), "현존")
+        self.assertEqual(self.value(
+            "SELECT summary->>'conflicts' FROM complex_lifecycle_batches WHERE batch='monthly-20261229'"), "1")
+        self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_quarantine"), 0)
+
+    def public_revision(self):
+        """The digest GET /api/metadata-revision returns, from the query in main.py (fastapi is not needed)."""
+        source = (ROOT / "main.py").read_text(encoding="utf-8").split("def metadata_revision():")[1]
+        query = source.split('db.execute("""')[1].split('""")')[0]
+        return self.db.execute(query).fetchone()[0]
+
+    def public_state(self):
+        import apply_lifecycle_baseline as apply
+
+        return (self.public_revision(), apply.marker_ids(self.db), self.db.execute(
+            "SELECT complex_id, existence, result_key, as_of FROM complex_lifecycle_state WHERE existence IS NOT NULL "
+            "ORDER BY complex_id").fetchall(), self.db.execute(
+            "SELECT complex_id, existence_status FROM complexes ORDER BY complex_id").fetchall())
+
+    def test_the_monthly_check_runs_on_postgresql(self):
+        import apply_lifecycle_baseline as apply
+        import lifecycle_admin as admin
+        import lifecycle_check
+        from lifecycle_check import monthly, sources, store
+
+        def key(lot):
+            return sources.parcel_params(f"11530_10200_0_{lot:04}_0000")
+
+        def put(cache, service, lot, rows, day):
+            params = lot if isinstance(lot, dict) else key(lot)
+            path = sources.cache_file(cache, service, params)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if service in ("current", "closed", "demolition"):
+                rows = [{**params, **row} for row in rows]
+            path.write_text(json.dumps({"retrieved_on": day.isoformat(), "total": len(rows), "rows": rows}),
+                            encoding="utf-8")
+
+        home = {"mainAtchGbCd": "0", "mainPurpsCdNm": "공동주택", "bldNm": "현존단지", "dongNm": "가동", "hhldCnt": "12",
+                "useAprDay": "19900101", "mgmBldrgstPk": "C1"}
+        old = {**home, "mgmBldrgstPk": "", "mgmShtregPk": "S1", "shterGbCd": "2", "shterDay": "20261201"}
+        removal = {"mgmPmsrgstPk": "D1", "mainPurpsCdNm": "공동주택", "demolEndDay": "20261201"}
+        answers, clock = {}, [date(2026, 12, 1)]
+
+        def fetch(cache, _keys, service, params, *, refresh=False, ask=None, parse=None):
+            put(cache, service, params, answers.get((service, int(params["bun"])), []), clock[0])
+            path = sources.cache_file(cache, service, params)
+            sources.note_write(path, path.read_text(encoding="utf-8"))  # As the real fetch does.
+
+        with patch("builtins.print"):
+            apply.run_apply(self.db, self.results(), TODAY, dry=False)
+        connect = store.psycopg.connect
+
+        def isolated(*args, **kwargs):
+            return connect(self.conninfo, **kwargs)
+
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        data = Path(temp.name)
+        reference = data / "reference"
+        put(reference, "trade_detail", {"LAWD_CD": "11530", "DEAL_YMD": "202603"},
+            [{"sggCd": "11530", "umdNm": "구로동", "umdCd": "10200"}], TODAY)
+        for service, rows in (("current", [home]), ("closed", []), ("demolition", [])):
+            put(reference, service, 3, rows, TODAY)
+
+        def run(day, **options):
+            clock[0] = day
+            return lifecycle_check.run_month(day, workers=1, **options)
+
+        def state(cid):
+            return self.db.execute("SELECT existence, pending_hold_code, result_key FROM complex_lifecycle_state "
+                                   "WHERE complex_id=%s", (cid,)).fetchone()
+
+        environment = {"JIPFIT_LIFECYCLE_DATA": str(data), "MOLIT_SERVICE_KEY": "k",
+                       "JIPFIT_LIFECYCLE_DIR": str(data / "batches"), "JIPFIT_LIFECYCLE_MAX_AUTO": "20"}
+        with patch("builtins.print"), patch.dict(os.environ, environment), \
+                patch.object(store.psycopg, "connect", isolated), patch.object(sources, "fetch", fetch), \
+                patch.object(sources, "today", lambda: clock[0]):
+            admin.seed_fingerprints(self.db, reference, TODAY)
+            self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_fingerprints"), 1)
+
+            # Another process holds the lock.
+            self.assertTrue(store.try_lock(self.db))
+            self.assertEqual(run(date(2026, 12, 1)), ["lifecycle:locked"])
+            self.db.execute("SELECT pg_advisory_unlock(%s)", (store.LOCK_KEY,))
+
+            # A month of holds only: VILLA is new without records, STAYS has a new demolition record.
+            # The operating database gives new complexes this value, which a hold must not touch.
+            self.db.execute("UPDATE complexes SET existence_status='unconfirmed' WHERE complex_id=%s", (VILLA,))
+            answers.update({("current", 3): [home], ("demolition", 3): [removal]})
+            before = self.public_state()
+            self.assertEqual(run(date(2026, 12, 1), dry_run=True), [])
+            self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_runs"), 0)
+            self.assertEqual(run(date(2026, 12, 1)), [])
+            self.assertEqual(self.public_state(), before)
+            self.assertEqual((state(VILLA)[:2], state(STAYS)[:2]), ((None, "기록없음"), ("present", "일부존치")))
+            self.assertEqual(self.db.execute(
+                "SELECT month, status, attempts, batch, as_of, remaining_calls, summary->>'보류' "
+                "FROM complex_lifecycle_runs").fetchone(),
+                ("2026-12", "applied", 1, "monthly-20261201", date(2026, 12, 1), 0, "2"))
+            seeded = self.db.execute("SELECT batch, as_of FROM complex_lifecycle_fingerprints "
+                                     "WHERE parcel_key='11530_10200_0_0003_0000'").fetchone()
+            self.assertEqual(seeded, ("monthly-20261201", date(2026, 12, 1)))
+            count = self.value("SELECT count(*) FROM complex_lifecycle_results")
+            self.assertEqual(run(date(2026, 12, 2)), [])
+            self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_results"), count)
+
+            # The mass guard holds the confirmation and accept applies it.
+            answers.update({("current", 3): [], ("closed", 3): [old]})
+            with patch.dict(os.environ, {"JIPFIT_LIFECYCLE_MAX_AUTO": "0"}):
+                self.assertEqual(run(date(2027, 1, 1)), [])
+            self.assertEqual(state(STAYS)[:2], ("present", "대량확정보류"))
+            self.assertEqual({r["complex_id"] for r in admin.holds(self.db, date(2027, 1, 2))}, {STAYS, VILLA})
+            unchanged = self.public_state()
+            admin.accept(self.db, "monthly-20270101", None, date(2027, 1, 2), dry=True)
+            self.assertEqual(self.public_state(), unchanged)
+            summary = admin.accept(self.db, "monthly-20270101", [STAYS], date(2027, 1, 2))
+            self.assertEqual((summary["applied"], summary["quarantined"]), (1, 0))
+            self.assertEqual(state(STAYS)[0::2], ("demolished", f"accept-20270102:{STAYS}"))
+            self.assertNotIn(STAYS, apply.marker_ids(self.db))
+
+            # An operator decision, then the fingerprint keeps it through the next month.
+            admin.resolve(self.db, STAYS, "present", "현장 확인", date(2027, 1, 3), dry=True)
+            self.assertEqual(state(STAYS)[0], "demolished")
+            admin.resolve(self.db, STAYS, "present", "현장 확인", date(2027, 1, 3))
+            admin.resolve(self.db, VILLA, "present", "현장 확인", date(2027, 1, 3))
+            self.assertEqual(admin.holds(self.db, date(2027, 1, 3), show_all=True), [])
+            with self.assertRaises(SystemExit):  # Stored contracts follow this date.
+                admin.resolve(self.db, VILLA, "demolished", "x", date(2027, 1, 3), effective_date=date(2026, 5, 1))
+            self.assertEqual(run(date(2027, 2, 1)), [])
+            self.assertEqual((state(STAYS)[0], state(VILLA)[0]), ("present", "present"))
+            self.assertEqual((data / "batches/monthly-20270201/results.jsonl").read_bytes(), b"")
+
+            # A new cancellation record reopens it; revert restores the judgment before the batch.
+            answers[("closed", 3)] = [old, {**old, "mgmShtregPk": "S2", "dongNm": "나동"}]
+            put(data / "unused", "current", 3, [], clock[0])
+            answers[("closed_outline", 3)] = [{"shterGbCd": "2", "hhldCnt": "24", "mainBldCnt": "2"}]
+            self.assertEqual(run(date(2027, 3, 1)), [])
+            self.assertEqual(state(STAYS)[0::2], ("demolished", f"monthly-20270301:{STAYS}"))
+            before_revert = self.public_state()
+            admin.revert(self.db, "monthly-20270301", None, date(2027, 3, 2), dry=True)
+            self.assertEqual(self.public_state(), before_revert)
+            outcome = admin.revert(self.db, "monthly-20270301", None, date(2027, 3, 2))
+            self.assertEqual(outcome["되돌림"], 1)
+            self.assertEqual(state(STAYS)[0], "present")
+            self.assertEqual(self.value("SELECT existence_status FROM complexes WHERE complex_id=%s", (STAYS,)), "현존")
+        self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_quarantine"), 0)
+        self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_batches WHERE status='applied'"), 4)
+
+    @unittest.skipUnless(shutil.which("pg_dump") and shutil.which("pg_restore"), "pg_dump and pg_restore needed")
+    def test_the_database_read_gives_the_values_a_backup_gave(self):
+        import apply_lifecycle_baseline as apply
+        from lifecycle_check import store
+
+        odd = "서울특별시 구로구 구로동|9|탭\t역\\슬래시"
+        self.db.execute("INSERT INTO complexes(complex_id,name,address,built) VALUES (%s,%s,%s,1990)",
+                        (odd, "줄\n바꿈\\N", "서울특별시 구로구 구로동 9"))
+        self.db.execute("INSERT INTO area_groups VALUES (%s,60,59.5)", (odd,))
+        self.trade(odd, date(2026, 2, 3))
+        self.db.execute("UPDATE trades SET is_cancelled = TRUE WHERE complex_id=%s", (odd,))
+        results = self.results()
+        with patch("builtins.print"):
+            apply.run_apply(self.db, results, TODAY, dry=False)
+            apply.correct(self.db, GONE, "present", "basis=t; note=a\tb\nc", TODAY, dry=False)
+        info = __import__("psycopg").conninfo.conninfo_to_dict(self.conninfo)
+        dump = Path(self.enterContext(TemporaryDirectory())) / "backup.dump"
+        subprocess.run(["pg_dump", "-Fc", "-h", info["host"], "-p", str(info["port"]), "-U", info["user"],
+                        "-d", info["dbname"], "-f", str(dump)], check=True, capture_output=True)
+        connect = store.psycopg.connect
+        with patch.object(store.psycopg, "connect", lambda **kw: connect(self.conninfo, **kw)):
+            with store.connect() as db:
+                tables, fingerprints = store.load_inputs(db)
+        self.assertEqual(fingerprints, {"as_of": None, "parcels": {}})
+        for table, (columns, _) in store.READS.items():
+            def comparable(rows):
+                return sorted((tuple(row[c] for c in columns) for row in rows), key=repr)
+
+            with self.subTest(table=table):
+                expected = comparable(backup_rows(dump, table))
+                self.assertTrue(expected)
+                self.assertEqual(comparable(tables[table]), expected)
+        self.assertIn((odd, "줄\n바꿈\\N", "1990"),
+                      {(r["complex_id"], r["name"], r["built"]) for r in tables["complexes"]})
+        states = {r["complex_id"]: r for r in tables["complex_lifecycle_state"]}
+        self.assertEqual((states[GONE]["evidence"], states[GONE]["effective_date"], states[DATED]["effective_date"]),
+                         ("basis=t; note=a\tb\nc", None, "2026-07-01"))
+        self.assertEqual({r["is_cancelled"] for r in tables["trades"]}, {"t", "f"})
 
     def test_delete_blocks_reregistration_and_restores_every_row(self):
         import delete_complexes as dc

@@ -3,12 +3,21 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from hashlib import sha256
 import json
+import re
 from typing import Any, Iterable, Sequence
 
+import pandas as pd
 from psycopg.types.json import Jsonb
+
+from districts import DISTRICTS
+from features import input_month_range
 
 VALID_EXISTENCE = ("present", "demolished", "pending")
 VALID_PRECISION = ("day", "month", "year")
+# jipfit_lifecycle writes these two evidence fields first, ahead of any free text.
+TRADE_CAUTION = re.compile(r"^basis=[^;]*; trade_caution_from=(\d{4}-\d{2}-\d{2})(?:;|$)")
+EXCLUSION_PREFIX = "lifecycle:"
+DISTRICT_CODES = {name: code for code, name in DISTRICTS.items()}
 
 
 @dataclass(frozen=True)
@@ -276,3 +285,104 @@ def apply_lifecycle_results(
             ))
             summary["applied"] += 1
     return summary
+
+
+def training_exclusion_date(existence, effective_date, evidence):
+    """The first contract date to leave out of model inputs: gone, no effective date, caution date recorded."""
+    if existence != "demolished" or effective_date is not None:
+        return None
+    matched = TRADE_CAUTION.match(evidence or "")
+    return date.fromisoformat(matched.group(1)) if matched else None
+
+
+def effective_date_conflicts(db, results):
+    """Stored active contracts on or after a result's effective date; daily rechecks would hold them."""
+    dated = []
+    for result in results:
+        if result.existence != "demolished" or result.effective_date is None:
+            continue
+        try:
+            dated.append((result.complex_id, date.fromisoformat(str(result.effective_date))))
+        except ValueError:
+            pass  # apply_lifecycle_results quarantines the record.
+    if not dated:
+        return []
+    ids, days = zip(*dated)
+    return db.execute("""
+        SELECT v.complex_id, v.effective_date, count(*), max(t.contract_date)
+        FROM unnest(%s::text[], %s::date[]) AS v(complex_id, effective_date)
+        JOIN trades t ON t.complex_id = v.complex_id AND NOT t.is_cancelled
+                     AND t.contract_date >= v.effective_date
+        GROUP BY v.complex_id, v.effective_date ORDER BY v.complex_id
+    """, (list(ids), list(days))).fetchall()
+
+
+def request_republish(db, complex_ids_from, today):
+    """Queue a district forecast rebuild when an exclusion change touches the current input window."""
+    first, last = input_month_range(pd.Period(today, freq="M"))
+    start, end = first.start_time.date(), (last + 1).start_time.date()
+    queued = set()
+    for cid, since in complex_ids_from.items():
+        parts = cid.split(" ")
+        code = DISTRICT_CODES.get(parts[1]) if len(parts) > 1 else None
+        if not code or code in queued or since >= end:
+            continue
+        if db.execute("""
+            SELECT 1 FROM trades
+            WHERE complex_id = %s AND NOT is_cancelled AND contract_date >= %s AND contract_date < %s LIMIT 1
+        """, (cid, max(since, start), end)).fetchone():
+            db.execute("""
+                INSERT INTO refresh_publish_pending(district, day, added, removed)
+                VALUES (%s, %s, 0, 0) ON CONFLICT (district, day) DO NOTHING
+            """, (code, today))
+            queued.add(code)
+    return sorted(queued)
+
+
+def sync_derived(db, complex_ids, today):
+    """Rebuild the existence_status copy and training exclusions of these complexes from confirmed state.
+
+    Inside a caller's transaction the block below becomes a savepoint, so both commit together.
+    """
+    ids = sorted(set(complex_ids))
+    with db.transaction():
+        copied = db.execute("""
+            UPDATE complexes c
+            SET existence_status = CASE s.existence WHEN 'present' THEN '현존' WHEN 'demolished' THEN '멸실' END
+            FROM complex_lifecycle_state s
+            WHERE c.complex_id = s.complex_id AND c.complex_id = ANY(%s::text[])
+                  AND s.existence IS NOT NULL  -- A hold without a confirmed judgment leaves the column as it was.
+        """, (ids,)).rowcount
+        states = db.execute("""
+            SELECT complex_id, result_key, existence, effective_date, evidence
+            FROM complex_lifecycle_state WHERE complex_id = ANY(%s::text[]) ORDER BY complex_id
+        """, (ids,)).fetchall()
+        existing = {row[0]: (row[1], row[2]) for row in db.execute("""
+            SELECT complex_id, exclude_from, reason FROM complex_training_exclusions
+            WHERE complex_id = ANY(%s::text[])
+        """, (ids,)).fetchall()}
+        changed = {}
+        for cid, result_key, existence, effective_date, evidence in states:
+            since = training_exclusion_date(existence, effective_date, evidence)
+            old_since, old_reason = existing.get(cid, (None, ""))
+            ours = old_reason.startswith(EXCLUSION_PREFIX)
+            if old_since is not None and not ours:
+                continue  # An exclusion entered by hand is never overwritten or removed here.
+            if since is not None:
+                db.execute("""
+                    INSERT INTO complex_training_exclusions(complex_id, exclude_from, reason)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (complex_id) DO UPDATE
+                    SET exclude_from = EXCLUDED.exclude_from, reason = EXCLUDED.reason
+                """, (cid, since, EXCLUSION_PREFIX + result_key))
+                if since != old_since:
+                    changed[cid] = min(since, old_since or since)
+            elif ours:
+                db.execute("DELETE FROM complex_training_exclusions WHERE complex_id = %s", (cid,))
+                changed[cid] = old_since
+        republish = request_republish(db, changed, today)
+        total = db.execute("""
+            SELECT count(*) FROM complex_training_exclusions WHERE complex_id = ANY(%s::text[])
+        """, (ids,)).fetchone()[0]
+    return {"existence_status": copied, "training_exclusions": total, "changed": len(changed),
+            "republish": republish}

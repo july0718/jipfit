@@ -65,7 +65,17 @@ services:
       KAPT_SERVICE_KEY: ${KAPT_SERVICE_KEY:-}
       NAVER_MAPS_API_KEY_ID: ${NAVER_MAPS_API_KEY_ID:-}
       NAVER_MAPS_API_KEY: ${NAVER_MAPS_API_KEY:-}
+      JIPFIT_LIFECYCLE_DIR: /lifecycle-data/batches
+      JIPFIT_LIFECYCLE_DATA: /lifecycle-data
+      JIPFIT_LIFECYCLE_AUTO: ${JIPFIT_LIFECYCLE_AUTO:-0}
+      JIPFIT_LIFECYCLE_MAX_AUTO: ${JIPFIT_LIFECYCLE_MAX_AUTO:-20}
+      JIPFIT_LIFECYCLE_COLLECT_MINUTES: ${JIPFIT_LIFECYCLE_COLLECT_MINUTES:-90}
+      JIPFIT_LIFECYCLE_READ_ONCE: ${JIPFIT_LIFECYCLE_READ_ONCE:-1}
+      JIPFIT_LIFECYCLE_RATE: ${JIPFIT_LIFECYCLE_RATE:-2}
+      JIPFIT_LIFECYCLE_RATE_MIN: ${JIPFIT_LIFECYCLE_RATE_MIN:-1}
     volumes:
       - ./verified-metadata:/metadata:ro
+      - ./lifecycle-data:/lifecycle-data
+      - ./lifecycle-data/reference:/lifecycle-data/reference:ro
 volumes:
   jipfit_pg:
