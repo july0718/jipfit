@@ -254,6 +254,33 @@ class SeedTests(unittest.TestCase):
         self.assertEqual(len(db.tables["facility_school_anchors"]), 1317)
         self.assertEqual([r["seq"] for r in db.tables["facility_schools"]], list(range(1317)))
 
+    def test_a_failed_seed_is_reported_by_type_and_the_updater_goes_on(self):
+        with patch.object(refresh.psycopg, "connect", return_value=FacilityDB()), \
+             patch.object(refresh, "ensure_facilities", side_effect=RuntimeError("secret")):
+            self.assertIsNone(refresh.seed_facilities())
+        message = " ".join(str(c) for c in self.printed.call_args_list)
+        self.assertIn("RuntimeError", message)
+        self.assertNotIn("secret", message)
+
+    def test_the_updater_seeds_after_the_schema_and_before_its_workers(self):
+        calls = []
+
+        class Thread:
+            def __init__(self, target, name):
+                pass
+
+            def start(self):
+                calls.append("thread")
+
+            def join(self):
+                pass
+
+        with patch.object(refresh, "ensure_schema", lambda: calls.append("schema")), \
+             patch.object(refresh, "seed_facilities", lambda: calls.append("seed")), \
+             patch.object(refresh, "Thread", Thread), patch("sys.argv", ["refresh.py"]):
+            refresh.main()
+        self.assertEqual(calls, ["schema", "seed", "thread", "thread"])
+
     def test_only_the_updater_and_the_commands_seed(self):
         for name in ("main.py", "apply_lifecycle_baseline.py", "delete_complexes.py", "lifecycle_admin.py",
                      "backfill_history.py"):
@@ -441,6 +468,29 @@ class FetchTests(unittest.TestCase):
             facilities.fetch_schools("k", anchors)
 
 
+class UpdaterStepTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch("builtins.print")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_failed_sources_carry_the_facilities_label(self):
+        with patch.object(refresh, "refresh_sources", return_value=["stations", "sync"]) as monthly:
+            self.assertEqual(refresh.refresh_facility_sources(TODAY), ["facilities:stations", "facilities:sync"])
+        monthly.assert_called_once_with(TODAY)
+        with patch.object(refresh, "refresh_sources", side_effect=RuntimeError("x")):
+            self.assertEqual(refresh.refresh_facility_sources(TODAY), ["facilities:RuntimeError"])
+
+    def test_the_daily_sync_runs_on_its_own_connection_and_labels_its_failure(self):
+        db = FacilityDB()
+        with patch.object(refresh.psycopg, "connect", return_value=db), \
+             patch.object(refresh, "sync_complex_facilities") as sync:
+            self.assertEqual(refresh.sync_facilities(), [])
+            sync.assert_called_once_with(db)
+            sync.side_effect = RuntimeError("x")
+            self.assertEqual(refresh.sync_facilities(), ["facilities:sync"])
+
+
 class CommandTests(unittest.TestCase):
     def run_command(self, *argv, failed=()):
         calls = []
@@ -464,6 +514,13 @@ class CommandTests(unittest.TestCase):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("facilities.py", dockerfile)
         self.assertIn("COPY facilities_seed/ facilities_seed/", dockerfile)
+
+    def test_the_updater_gets_the_keys(self):
+        updater = (ROOT.parent / "compose.yaml").read_text(encoding="utf-8").split("\n  updater:")[1]
+        for name in ("NEIS_API_KEY", "TDATA_SUBWAY_API_KEY"):
+            self.assertIn(f"{name}: ${{{name}:-}}", updater)
+            self.assertIn(f"\n{name}=\n", (ROOT.parent / ".env.example").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

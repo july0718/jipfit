@@ -19,6 +19,7 @@ import psycopg
 
 from automatic_metadata import address_key, refresh_automatic_metadata
 from districts import DISTRICTS, GWANGJIN
+from facilities import ensure_facilities, refresh_sources, sync_complex_facilities
 from features import build_inputs, input_month_range, is_in_input_window
 from lifecycle_check import run_month
 from lifecycle_inbox import apply_inbox
@@ -1393,6 +1394,35 @@ def apply_lifecycle_inbox(today):
         return [f"lifecycle-inbox:{type(exc).__name__}"]
 
 
+def seed_facilities():
+    """Fill empty facility tables when the updater starts; a failure never stops the refresh schedule."""
+    try:
+        with psycopg.connect(connect_timeout=8) as db:
+            ensure_facilities(db)
+    except Exception as exc:
+        print(f"Facility seed deferred ({type(exc).__name__}).", flush=True)
+
+
+def refresh_facility_sources(today):
+    """Monthly public facility catalogs; failed sources join the monthly retry."""
+    try:
+        return [f"facilities:{name}" for name in refresh_sources(today)]
+    except Exception as exc:
+        print(f"Facility refresh deferred ({type(exc).__name__}).", flush=True)
+        return [f"facilities:{type(exc).__name__}"]
+
+
+def sync_facilities():
+    """Recompute every complex's facilities after the day's changes; a failure joins the daily retry."""
+    try:
+        with psycopg.connect(connect_timeout=8) as db:
+            sync_complex_facilities(db)
+        return []
+    except Exception as exc:
+        print(f"Facility sync deferred ({type(exc).__name__}).", flush=True)
+        return ["facilities:sync"]
+
+
 def seconds_until_refresh(now=None):
     now = now or datetime.now(KST)
     next_run = datetime.combine(now.date(), time(6), KST)
@@ -1799,6 +1829,7 @@ def run_once(districts=None, *, metadata_dir=None, now=None, lifecycle_provider=
     """Execute one immediate pass of daily trades, geocoding, monthly metadata, and verified files."""
     target_districts = list(districts or DISTRICTS)
     ensure_schema()
+    seed_facilities()
     now = now or datetime.now(KST)
     slot_day = refresh_slot_start(now).date()
 
@@ -1815,9 +1846,11 @@ def run_once(districts=None, *, metadata_dir=None, now=None, lifecycle_provider=
             apply_metadata(metadata_dir, slot_day)
         except Exception as exc:
             metadata_failed.append(f"verified-metadata ({type(exc).__name__})")
-    # After K-apt and the verified files, so the check reads the corrected names and addresses.
+    # After K-apt and the verified files, so both steps read the corrected names and addresses.
+    metadata_failed.extend(refresh_facility_sources(slot_day))
     metadata_failed.extend(run_lifecycle_month(slot_day))
     metadata_failed.extend(apply_lifecycle_inbox(slot_day))
+    metadata_failed.extend(sync_facilities())
 
     errors = []
     if failed:
@@ -1867,6 +1900,7 @@ def main():
                 except Exception as exc:
                     failed.append(f"verified-metadata:{type(exc).__name__}")
             failed.extend(apply_lifecycle_inbox(slot_day))
+            failed.extend(sync_facilities())
             return failed
 
         while True:
@@ -1894,6 +1928,7 @@ def main():
                 # The existence check below counts its own attempts, so it runs in every attempt of the slot.
                 failed.append(type(exc).__name__)
                 print(f"{metadata_worker_name} metadata step error: {type(exc).__name__}", flush=True)
+            failed.extend(refresh_facility_sources(slot_day))
             failed.extend(run_lifecycle_month(slot_day))
             return failed
 
@@ -1916,6 +1951,7 @@ def main():
             clock.sleep(max(1, wait))
 
     ensure_schema()
+    seed_facilities()
 
     daily_thread = Thread(
         target=daily_worker,
