@@ -35,6 +35,9 @@ CATALOGS = {
 ANCHORS = ("facility_school_anchors", ("name", "level", "address", "latitude", "longitude"))
 KEYS = {"stations": "TDATA_SUBWAY_API_KEY", "schools": "NEIS_API_KEY"}  # Apartments need no key.
 LEVELS = ("초등학교", "중학교", "고등학교")
+# Same-name station rows this close are one transfer station (서울역's platforms span 510 m); 신촌's
+# 2호선 and 경의중앙선 stations, 715 m apart, have no transfer and stay separate.
+TRANSFER_METRES = 600
 EARTH = 6371008.8
 RADIANS = math.pi / 180
 
@@ -168,8 +171,34 @@ def fetch_apartments():
     return "서울시 공동주택 아파트 정보 OA-15818", rows
 
 
+def transfer_lines(rows):
+    """[name, lines, lat, lon] rows, each labelled with every line of its transfer station.
+
+    The source has one row per line platform, with its own coordinates. Same-name rows linked by steps of at
+    most TRANSFER_METRES form one station; each row keeps its coordinates, so distances stay per platform.
+    """
+    parent = list(range(len(rows)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    by_name = defaultdict(list)
+    for i, (name, _, y, x) in enumerate(rows):
+        for j in by_name[name]:
+            if distance(y, x, rows[j][2], rows[j][3]) <= TRANSFER_METRES:
+                parent[root(i)] = root(j)
+        by_name[name].append(i)
+    lines = defaultdict(set)
+    for i, row in enumerate(rows):
+        lines[root(i)].update(row[1])
+    return [[name, "·".join(sorted(lines[root(i)])), y, x] for i, (name, _, y, x) in enumerate(rows)]
+
+
 def fetch_stations(key):
-    """(source label, rows) of the subway station coordinates, lines merged per station."""
+    """(source label, rows) of the subway station coordinates, lines merged per transfer station."""
     url = "https://t-data.seoul.go.kr/apig/apiman-gateway/tapi/TaimsKsccDvSubwayStationGeom/1.0?"
     rows = {}
     start = 1
@@ -188,7 +217,7 @@ def fetch_stations(key):
             raise ValueError("station pagination stalled")
         start += len(data)
     return ("서울 교통빅데이터플랫폼 지하철역 좌표정보",
-            [[name, "·".join(sorted(lines)), y, x] for (name, y, x), lines in rows.items()])
+            transfer_lines([[name, lines, y, x] for (name, y, x), lines in rows.items()]))
 
 
 def fetch_schools(key, anchors):

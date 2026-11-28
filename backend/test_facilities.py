@@ -465,6 +465,20 @@ class FetchTests(unittest.TestCase):
                 self.assertRaises(ValueError):
             facilities.fetch_stations("k")
 
+    def test_transfer_stations_share_their_lines_and_keep_each_platform(self):
+        record = lambda name, line, y: {"convY": str(y), "convX": "127.1", "stnKrNm": name, "lineNm": line}
+        data = [record("환승", "2호선", 37.5), record("환승", "7호선", 37.504), record("환승", "9호선", 37.508),
+                record("신촌", "2호선", 37.6), record("신촌", "경의중앙선", 37.6065), record("홀로", "1호선", 37.7)]
+        with patch.object(facilities, "_request", return_value=json.dumps(data).encode()):
+            _, rows = facilities.fetch_stations("k")
+        # 445 m steps chain into one station (ends 890 m apart); 723 m apart stays two stations.
+        self.assertEqual(rows, [["환승", "2호선·7호선·9호선", 37.5, 127.1], ["환승", "2호선·7호선·9호선", 37.504, 127.1],
+                                ["환승", "2호선·7호선·9호선", 37.508, 127.1], ["신촌", "2호선", 37.6, 127.1],
+                                ["신촌", "경의중앙선", 37.6065, 127.1], ["홀로", "1호선", 37.7, 127.1]])
+        found = facilities.nearest(37.5079, 127.1, rows)
+        self.assertEqual(found[:2], ["환승", "2호선·7호선·9호선"])
+        self.assertEqual(found[3], 37.508)
+
     def test_schools_take_coordinates_only_from_a_matching_anchor(self):
         anchors = [["가초", "초등학교", "서울특별시 광진구 길 1", 37.5, 127.1]]
         school = lambda name, address: {"SCHUL_NM": name, "SCHUL_KND_SC_NM": "초등학교", "ORG_RDNMA": address}
