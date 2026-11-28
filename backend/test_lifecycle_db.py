@@ -521,5 +521,39 @@ class LifecycleDatabaseTests(unittest.TestCase):
             self.assertEqual(body["items"][STAYS]["station"], ["새 역", "1호선", 0, 37.5, 126.9])
 
 
+@unittest.skipUnless(DSN and real_psycopg(), "set JIPFIT_TEST_DSN (and install psycopg) to run")
+class FreshVolumeTests(unittest.TestCase):
+    def test_docker_init_order_builds_the_schema_the_services_extend(self):
+        """A new Docker volume runs db/*.sql by file name; the api then runs its own order on start."""
+        import refresh
+
+        psycopg = real_psycopg()
+        name = "jipfit_test_" + uuid.uuid4().hex[:12]
+        admin = psycopg.connect(DSN, autocommit=True)
+        admin.execute(f"CREATE DATABASE {name} TEMPLATE template0 ENCODING 'UTF8'")
+        self.addCleanup(admin.close)
+        self.addCleanup(admin.execute, f"DROP DATABASE {name} WITH (FORCE)")
+        conninfo = f"{DSN} dbname={name}"
+        db = psycopg.connect(conninfo, autocommit=True)
+        self.addCleanup(db.close)
+        files = sorted((ROOT / "db").glob("*.sql"))
+        self.assertLess(files.index(ROOT / "db/metadata_refresh.sql"), files.index(ROOT / "db/regions.sql"))
+        for path in files:
+            # psql meta-commands (\copy, \set) load the bundled sample data, which this test leaves out.
+            sql = "\n".join(line for line in path.read_text(encoding="utf-8").splitlines()
+                            if not line.startswith("\\"))
+            with self.subTest(file=path.name):
+                db.execute(sql)
+        self.assertEqual(db.execute("SELECT count(*) FROM district_refresh_runs").fetchone()[0], 0)
+        connect = psycopg.connect
+        with patch.object(refresh.psycopg, "connect", lambda **kw: connect(conninfo, **kw)):
+            refresh._schema_ready = False
+            refresh.ensure_schema()
+        refresh._schema_ready = False
+        self.assertEqual(db.execute(
+            "SELECT count(*) FROM information_schema.columns "
+            "WHERE table_name='district_refresh_runs' AND column_name='slot_start'").fetchone()[0], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

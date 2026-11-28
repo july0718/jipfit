@@ -369,23 +369,31 @@ UPDATE refresh_worker_attempts
 SET status = 'deferred', lease_until = NULL, claim_token = NULL
 WHERE status = 'running' AND next_attempt_at IS NOT NULL;
 
-WITH migrated_checkpoints AS (
-    UPDATE daily_trade_checkpoints c
-    SET slot_start = c.created_at
-    WHERE c.slot_start IS NULL
-    RETURNING c.district, c.day, c.added, c.removed, c.created_at
-)
-INSERT INTO refresh_publish_pending(district, day, added, removed)
-SELECT m.district, m.day, m.added, m.removed
-FROM migrated_checkpoints m
-WHERE (m.added <> 0 OR m.removed <> 0)
-  AND NOT EXISTS (
-      SELECT 1 FROM district_refresh_runs r
-      WHERE r.district = m.district AND r.day = m.day AND r.finished_at >= m.created_at
-  )
-ON CONFLICT (district, day) DO UPDATE
-SET added = refresh_publish_pending.added + EXCLUDED.added,
-    removed = refresh_publish_pending.removed + EXCLUDED.removed;
+-- A fresh Docker volume runs db/*.sql by file name, so this file runs before regions.sql creates
+-- district_refresh_runs. The migration is skipped then (no checkpoints exist yet); the api and updater
+-- run regions.sql first and this file again on every start.
+DO $$
+BEGIN
+    IF to_regclass('district_refresh_runs') IS NOT NULL THEN
+        WITH migrated_checkpoints AS (
+            UPDATE daily_trade_checkpoints c
+            SET slot_start = c.created_at
+            WHERE c.slot_start IS NULL
+            RETURNING c.district, c.day, c.added, c.removed, c.created_at
+        )
+        INSERT INTO refresh_publish_pending(district, day, added, removed)
+        SELECT m.district, m.day, m.added, m.removed
+        FROM migrated_checkpoints m
+        WHERE (m.added <> 0 OR m.removed <> 0)
+          AND NOT EXISTS (
+              SELECT 1 FROM district_refresh_runs r
+              WHERE r.district = m.district AND r.day = m.day AND r.finished_at >= m.created_at
+          )
+        ON CONFLICT (district, day) DO UPDATE
+        SET added = refresh_publish_pending.added + EXCLUDED.added,
+            removed = refresh_publish_pending.removed + EXCLUDED.removed;
+    END IF;
+END $$;
 
 UPDATE complexes c SET latitude=NULL, longitude=NULL
 FROM complex_geocode_pending p
