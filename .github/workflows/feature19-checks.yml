@@ -12,6 +12,8 @@ on:
       - "backend/refresh_metadata.py"
       - "backend/fetch_macro.py"
       - "backend/db/**"
+      - "backend/facilities.py"
+      - "backend/facilities_seed/**"
       - "backend/reference_band.py"
       - "backend/test_*.py"
       - "backend/Dockerfile"

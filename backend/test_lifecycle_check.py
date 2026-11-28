@@ -1540,6 +1540,8 @@ class DatabaseReadTests(unittest.TestCase):
 
 
 class WiringTests(unittest.TestCase):
+    FACILITY_STEP = staticmethod(refresh.refresh_facility_sources)
+
     def order(self, calls):
         def step(name):
             def run(*args, **kwargs):
@@ -1550,8 +1552,11 @@ class WiringTests(unittest.TestCase):
         return (patch.object(refresh, "ensure_schema"), patch.object(refresh, "refresh_many", step("trades")),
                 patch.object(refresh, "refresh_automatic_metadata", step("metadata")),
                 patch.object(refresh, "apply_metadata", step("verified")),
+                patch.object(refresh, "seed_facilities", step("seed")),
+                patch.object(refresh, "refresh_facility_sources", step("facilities")),
                 patch.object(refresh, "run_lifecycle_month", step("lifecycle")),
-                patch.object(refresh, "apply_lifecycle_inbox", step("inbox")), patch("builtins.print"))
+                patch.object(refresh, "apply_lifecycle_inbox", step("inbox")),
+                patch.object(refresh, "sync_facilities", step("sync")), patch("builtins.print"))
 
     def start(self, patches):
         for item in patches:
@@ -1562,7 +1567,8 @@ class WiringTests(unittest.TestCase):
         calls = []
         self.start(self.order(calls))
         refresh.run_once(["11530"], metadata_dir=Path("m"))
-        self.assertEqual(calls, ["trades", "metadata", "verified", "lifecycle", "inbox"])
+        self.assertEqual(calls, ["seed", "trades", "metadata", "verified", "facilities", "lifecycle", "inbox",
+                                 "sync"])
 
     def monthly_job(self, calls, extra=()):
         jobs, results = {}, []
@@ -1595,7 +1601,7 @@ class WiringTests(unittest.TestCase):
     def test_the_monthly_job_checks_after_the_metadata(self):
         calls = []
         self.assertEqual(self.monthly_job(calls), [])
-        self.assertEqual(calls, ["metadata", "verified", "lifecycle"])
+        self.assertEqual(calls, ["seed", "metadata", "verified", "facilities", "lifecycle"])
 
     def test_a_failing_metadata_step_still_runs_the_check(self):
         calls = []
@@ -1604,7 +1610,18 @@ class WiringTests(unittest.TestCase):
             raise OSError("file")
 
         failed = self.monthly_job(calls, (patch.object(refresh, "apply_metadata", broken),))
-        self.assertEqual((failed, calls), (["OSError"], ["metadata", "lifecycle"]))
+        self.assertEqual((failed, calls), (["OSError"], ["seed", "metadata", "facilities", "lifecycle"]))
+
+    def test_a_failing_facility_step_still_runs_the_check(self):
+        for outcome, label in (({"return_value": ["stations"]}, "facilities:stations"),
+                               ({"side_effect": RuntimeError("x")}, "facilities:RuntimeError")):
+            calls = []
+            with self.subTest(label=label):
+                failed = self.monthly_job(calls, (
+                    patch.object(refresh, "refresh_facility_sources", self.FACILITY_STEP),
+                    patch.object(refresh, "refresh_sources", **outcome)))
+                self.assertEqual((failed, calls), ([label], ["seed", "metadata", "verified", "lifecycle"]))
+                self.doCleanups()
 
 
 class PackagingTests(unittest.TestCase):

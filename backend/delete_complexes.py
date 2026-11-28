@@ -34,6 +34,7 @@ TABLES = (
     ("model_inputs", TARGET),
     ("area_groups", TARGET),
     ("complex_training_exclusions", TARGET),
+    ("complex_facilities", TARGET),
     ("complex_lifecycle_state", TARGET),
     ("complex_lifecycle_results", TARGET),
     ("complex_lifecycle_quarantine", TARGET),
@@ -51,6 +52,9 @@ TABLES = (
     ("complexes", TARGET),
 )
 IDENTITY_TABLES = {"trades", "complex_lifecycle_quarantine", "refresh_identity_period_decisions"}
+# Archives written before these tables were listed stay restorable. complex_facilities holds derived rows
+# that the next facility sync rebuilds.
+ADDED_TABLES = {"complex_facilities"}
 
 
 def read_targets(path):
@@ -178,7 +182,9 @@ def delete(db, targets, archive, today, *, dry=False):
 
 def restore(db, archive, *, dry=False):
     document = json.loads(Path(archive).read_text(encoding="utf-8"))
-    if document.get("version") != ARCHIVE_VERSION or set(document.get("tables", ())) != {n for n, _ in TABLES}:
+    listed = {name for name, _ in TABLES}
+    if document.get("version") != ARCHIVE_VERSION or set(document.get("tables", ())) not in (
+            listed, listed - ADDED_TABLES):
         raise ValueError("지원하지 않는 보관 파일입니다")
     ids = sorted(document["targets"])
     with db.transaction(force_rollback=dry):
@@ -189,7 +195,7 @@ def restore(db, archive, *, dry=False):
         for table, _ in reversed(TABLES):
             override = "OVERRIDING SYSTEM VALUE " if table in IDENTITY_TABLES else ""
             query = f"INSERT INTO {table} {override}SELECT * FROM jsonb_populate_record(NULL::{table}, %s::jsonb)"
-            for row in document["tables"][table]:
+            for row in document["tables"].get(table, []):
                 db.execute(query, (row,))
         db.execute("DELETE FROM complex_exclusions WHERE complex_id = ANY(%s::text[])", (ids,))
     counts = {table: len(rows) for table, rows in document["tables"].items() if rows}

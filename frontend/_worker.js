@@ -1,5 +1,5 @@
 const methods = {
-  "/api/metadata-revision": "GET", "/api/complex": "GET", "/api/trades": "GET", "/api/complexes": "GET", "/api/districts": "GET", "/api/predict": "GET", "/api/account": "GET",
+  "/api/facilities": "GET", "/api/complex": "GET", "/api/trades": "GET", "/api/complexes": "GET", "/api/districts": "GET", "/api/predict": "GET", "/api/account": "GET",
   "/api/account/register": "POST", "/api/account/login": "POST",
   "/api/account/comparison": "POST", "/api/account/note": "POST", "/api/account/seen": "POST",
   "/api/account/logout": "POST", "/api/account/favorite": "POST"

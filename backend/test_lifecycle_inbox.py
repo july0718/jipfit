@@ -406,7 +406,10 @@ class DailyWorkerTests(unittest.TestCase):
         return (patch.object(refresh, "ensure_schema"), patch.object(refresh, "refresh_many", step("trades")),
                 patch.object(refresh, "refresh_automatic_metadata", step("metadata")),
                 patch.object(refresh, "apply_metadata", step("verified")),
-                patch.object(refresh, "apply_lifecycle_inbox", step("inbox", ["lifecycle:b"])))
+                patch.object(refresh, "seed_facilities", step("seed")),
+                patch.object(refresh, "refresh_facility_sources", step("facilities")),
+                patch.object(refresh, "apply_lifecycle_inbox", step("inbox", ["lifecycle:b"])),
+                patch.object(refresh, "sync_facilities", step("sync", ["facilities:sync"])))
 
     def test_a_single_run_applies_the_inbox_after_the_updates(self):
         calls = []
@@ -416,8 +419,8 @@ class DailyWorkerTests(unittest.TestCase):
             self.addCleanup(item.stop)
         with self.assertRaises(SystemExit) as raised:
             refresh.run_once(["11530"], metadata_dir=Path("m"))
-        self.assertEqual(calls, ["trades", "metadata", "verified", "inbox"])
-        self.assertIn("lifecycle:b", str(raised.exception))
+        self.assertEqual(calls, ["seed", "trades", "metadata", "verified", "facilities", "inbox", "sync"])
+        self.assertIn("lifecycle:b, facilities:sync", str(raised.exception))
 
     def test_the_daily_job_applies_the_inbox_and_the_monthly_job_does_not(self):
         calls, jobs = [], {}
@@ -447,11 +450,14 @@ class DailyWorkerTests(unittest.TestCase):
         refresh.main()
         with self.assertRaises(Stop):
             jobs["daily-refresh"]()
-        self.assertEqual(calls, ["trades", "metadata", "verified", "inbox", ["lifecycle:b"]])
+        self.assertEqual(calls, ["seed", "trades", "metadata", "verified", "inbox", "sync",
+                                 ["lifecycle:b", "facilities:sync"]])
         calls.clear()
         with self.assertRaises(Stop):
             jobs["metadata-refresh"]()
+        self.assertIn("facilities", calls)
         self.assertNotIn("inbox", calls)
+        self.assertNotIn("sync", calls)
 
 
 class PackagingTests(unittest.TestCase):

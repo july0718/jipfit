@@ -3,9 +3,6 @@ name: Deploy Jipfit to Cloudflare Pages
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '30 22 1 * *' # 2nd day of each month, 07:30 Asia/Seoul
-    - cron: '45 22 * * *' # Check for verified metadata changes after the regular export.
   workflow_dispatch:
 
 permissions:
@@ -19,7 +16,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: 저장소 코드 받기
@@ -30,48 +27,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: 시설 공개자료 갱신
-        if: github.event.schedule == '30 22 1 * *' || github.event_name == 'workflow_dispatch'
-        continue-on-error: true
-        env:
-          NEIS_API_KEY: ${{ secrets.NEIS_API_KEY }}
-          TDATA_SUBWAY_API_KEY: ${{ secrets.TDATA_SUBWAY_API_KEY }}
-        run: python tools/refresh-facilities.py
-
-      - name: 월간 단지 기본정보 갱신
-        id: metadata
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        env:
-          PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
-        run: |
-          origin="https://jipfit-48v.pages.dev"
-          if [[ "${{ github.event.schedule }}" == "45 22 * * *" ]]; then
-            revision=$(curl -fsS --retry 2 "$origin/api/metadata-revision" | jq -er '.revision | select(test("^[0-9a-f]{32}$"))')
-            previous=$(curl -fsS "$origin/metadata/verified-revision.txt" || true)
-            if [[ "$revision" == "$previous" ]]; then
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            node tools/monthly-metadata.mjs "$origin" frontend/public/metadata
-            printf '%s\n' "$revision" > frontend/public/metadata/verified-revision.txt
-          else
-            if revision=$(curl -fsS --retry 2 "$origin/api/metadata-revision" | jq -er '.revision | select(test("^[0-9a-f]{32}$"))') && \
-               node tools/monthly-metadata.mjs "$origin" frontend/public/metadata; then
-              printf '%s\n' "$revision" > frontend/public/metadata/verified-revision.txt
-            else
-              echo "::warning::Remote metadata origin unreachable; retaining committed public/metadata snapshot."
-            fi
-          fi
-          git add frontend/public/metadata frontend/facilities
-          if ! git diff --cached --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -m "Refresh monthly complex metadata"
-            git push origin HEAD:main
-          fi
-
       - name: React 빌드 및 Pages 배포 폴더 준비
-        if: steps.metadata.outputs.skip != 'true'
         working-directory: frontend
         run: |
           npm install --include=dev --no-audit --no-fund
@@ -79,8 +35,8 @@ jobs:
           cp index.html style.css config.js _worker.js dist/
 
       - name: 서울 통합 HGB 홀드아웃 JSON 검증 및 배포
-        if: steps.metadata.outputs.skip != 'true'
         run: |
+          mkdir -p frontend/dist/metadata
           if [ -f frontend/public/metadata/seoul-forecast-reference.json ]; then
             python backend/seoul_reference.py frontend/public/metadata/seoul-forecast-reference.json
             cp frontend/public/metadata/seoul-forecast-reference.json frontend/dist/metadata/
@@ -89,7 +45,6 @@ jobs:
           fi
 
       - name: 기존 Cloudflare Pages 프로젝트에 배포
-        if: steps.metadata.outputs.skip != 'true'
         working-directory: ${{ runner.temp }}
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

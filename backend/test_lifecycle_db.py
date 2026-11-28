@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
+from threading import Thread
 import unittest
 from unittest.mock import patch
 import uuid
@@ -213,10 +214,10 @@ class LifecycleDatabaseTests(unittest.TestCase):
         self.assertEqual(self.value("SELECT count(*) FROM complex_lifecycle_quarantine"), 0)
 
     def public_revision(self):
-        """The digest GET /api/metadata-revision returns, from the query in main.py (fastapi is not needed)."""
-        source = (ROOT / "main.py").read_text(encoding="utf-8").split("def metadata_revision():")[1]
-        query = source.split('db.execute("""')[1].split('""")')[0]
-        return self.db.execute(query).fetchone()[0]
+        """The digest of the public complex data (apply_lifecycle_baseline.REVISION_SQL)."""
+        import apply_lifecycle_baseline as apply
+
+        return self.db.execute(apply.REVISION_SQL).fetchone()[0]
 
     def public_state(self):
         import apply_lifecycle_baseline as apply
@@ -409,7 +410,10 @@ class LifecycleDatabaseTests(unittest.TestCase):
         self.db.execute("INSERT INTO refresh_revision_pending VALUES (%s,'11530','2026-03-01',%s,'[]',%s,%s)",
                         (trade, VILLA, TODAY, TODAY))
         self.db.execute("INSERT INTO complex_geocode_pending VALUES (%s)", (VILLA,))
+        self.db.execute("""INSERT INTO complex_facilities(complex_id, households, parking, station, schools)
+            VALUES (%s, 10, 0.5, '["역", "1호선", 3, 37.5, 126.9]', '[]')""", (VILLA,))
         before = dc.collect(self.db, [VILLA])
+        self.assertEqual(len(before["complex_facilities"]), 1)
         with TemporaryDirectory() as temp, patch("builtins.print"):
             archive = Path(temp) / "archive.json"
             dc.delete(self.db, {VILLA: "빌라"}, archive, TODAY, dry=True)
@@ -429,6 +433,126 @@ class LifecycleDatabaseTests(unittest.TestCase):
             self.assertTrue(json.loads(archive.read_text(encoding="utf-8"))["tables"]["favorites"])
         self.assertEqual(dc.collect(self.db, [VILLA]), before)
         self.assertEqual(self.value("SELECT count(*) FROM complex_exclusions"), 0)
+        # An archive written before complex_facilities was listed has no such table and is still restorable.
+        with TemporaryDirectory() as temp, patch("builtins.print"):
+            archive = Path(temp) / "old-archive.json"
+            dc.delete(self.db, {VILLA: "빌라"}, archive, TODAY)
+            document = json.loads(archive.read_text(encoding="utf-8"))
+            del document["tables"]["complex_facilities"]
+            archive.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+            dc.restore(self.db, archive)
+        self.assertEqual(dc.collect(self.db, [VILLA]), {**before, "complex_facilities": []})
+
+    def test_facilities_are_seeded_synced_and_refreshed_on_postgresql(self):
+        import facilities
+
+        connect = __import__("psycopg").connect
+        isolated = lambda **kw: connect(self.conninfo, **kw)
+        # A first computation that fails leaves the committed snapshot behind for the next sync.
+        with patch("builtins.print"), patch.object(facilities, "compute_facilities", side_effect=RuntimeError), \
+                self.assertRaises(RuntimeError), connect(self.conninfo) as db:
+            facilities.ensure_facilities(db)
+        self.assertEqual((self.value("SELECT count(*) FROM facility_schools"),
+                          self.value("SELECT count(*) FROM complex_facilities")), (1317, 0))
+        with patch("builtins.print"), connect(self.conninfo) as db:
+            facilities.ensure_facilities(db)
+        counts = [self.value(f"SELECT count(*) FROM {table}") for table in (
+            "facility_apartments", "facility_stations", "facility_schools", "facility_school_anchors",
+            "complex_facilities")]
+        self.assertEqual(counts, [2712, 517, 1317, 1317, 4])
+        seed = json.loads((ROOT / "facilities_seed/schools.json").read_text(encoding="utf-8"))["rows"]
+        with connect(self.conninfo) as db:
+            self.assertEqual(facilities.load_catalog(db)["schools"], seed)
+            catalog = facilities.load_catalog(db)
+        # What the database holds equals the pure computation over the stored complexes.
+        homes = [dict(zip(("complex_id", "name", "address", "latitude", "longitude"), row)) for row in
+                 self.db.execute("SELECT complex_id, name, address, latitude, longitude FROM complexes").fetchall()]
+        expected = facilities.compute_facilities(homes, catalog)
+        rows = self.db.execute("SELECT complex_id, households, parking, station, schools "
+                               "FROM complex_facilities").fetchall()
+        self.assertEqual({r[0]: dict(zip(("households", "parking", "station", "schools"), r[1:])) for r in rows},
+                         expected)
+
+        # A second sync waits until the first one commits instead of colliding with it.
+        first, second = connect(self.conninfo), connect(self.conninfo)
+        self.addCleanup(first.close)
+        self.addCleanup(second.close)
+        errors = []
+
+        def run_second():
+            try:
+                facilities.sync_complex_facilities(second)
+                second.commit()
+            except Exception as exc:
+                errors.append(exc)
+
+        with patch("builtins.print"):
+            first.execute("SELECT 1")  # An open transaction keeps the lock until commit.
+            facilities.sync_complex_facilities(first)
+            worker = Thread(target=run_second)
+            worker.start()
+            worker.join(1.0)
+            self.assertTrue(worker.is_alive())
+            first.commit()
+            worker.join(30)
+        self.assertEqual((worker.is_alive(), errors), (False, []))
+
+        station = ["새 역", "1호선", 37.5, 126.9]
+        with patch("builtins.print"), patch.dict(os.environ, {"TDATA_SUBWAY_API_KEY": "k"}, clear=False), \
+             patch.dict(os.environ, {"NEIS_API_KEY": ""}), \
+             patch.object(facilities.psycopg, "connect", isolated), \
+             patch.object(facilities, "fetch_apartments", return_value=("짧은 응답", [])), \
+             patch.object(facilities, "fetch_stations", return_value=("새 출처", [station] * 400)):
+            self.assertEqual(facilities.refresh_sources(date(2026, 12, 1)), ["apartments"])
+        self.assertEqual(self.value("SELECT count(*) FROM facility_apartments"), 2712)
+        self.assertEqual(self.db.execute(
+            "SELECT label, row_count, refreshed_month FROM facility_sources WHERE source='stations'").fetchone(),
+            ("새 출처 · 조회 2026-12-01", 400, "2026-12"))
+        self.assertEqual(self.value("SELECT station->>0 FROM complex_facilities WHERE complex_id=%s", (STAYS,)),
+                         "새 역")
+        if all(importlib.util.find_spec(name) for name in ("fastapi", "sklearn")):
+            import main
+            from psycopg.rows import dict_row
+
+            with patch.object(main, "connect", lambda: connect(self.conninfo, row_factory=dict_row)):
+                body = main.list_facilities("구로구")
+            self.assertEqual((len(body["sources"]), len(body["items"])), (3, 4))
+            self.assertEqual(body["sources"][1], "새 출처 · 조회 2026-12-01")
+            self.assertEqual(body["items"][STAYS]["station"], ["새 역", "1호선", 0, 37.5, 126.9])
+
+
+@unittest.skipUnless(DSN and real_psycopg(), "set JIPFIT_TEST_DSN (and install psycopg) to run")
+class FreshVolumeTests(unittest.TestCase):
+    def test_docker_init_order_builds_the_schema_the_services_extend(self):
+        """A new Docker volume runs db/*.sql by file name; the api then runs its own order on start."""
+        import refresh
+
+        psycopg = real_psycopg()
+        name = "jipfit_test_" + uuid.uuid4().hex[:12]
+        admin = psycopg.connect(DSN, autocommit=True)
+        admin.execute(f"CREATE DATABASE {name} TEMPLATE template0 ENCODING 'UTF8'")
+        self.addCleanup(admin.close)
+        self.addCleanup(admin.execute, f"DROP DATABASE {name} WITH (FORCE)")
+        conninfo = f"{DSN} dbname={name}"
+        db = psycopg.connect(conninfo, autocommit=True)
+        self.addCleanup(db.close)
+        files = sorted((ROOT / "db").glob("*.sql"))
+        self.assertLess(files.index(ROOT / "db/metadata_refresh.sql"), files.index(ROOT / "db/regions.sql"))
+        for path in files:
+            # psql meta-commands (\copy, \set) load the bundled sample data, which this test leaves out.
+            sql = "\n".join(line for line in path.read_text(encoding="utf-8").splitlines()
+                            if not line.startswith("\\"))
+            with self.subTest(file=path.name):
+                db.execute(sql)
+        self.assertEqual(db.execute("SELECT count(*) FROM district_refresh_runs").fetchone()[0], 0)
+        connect = psycopg.connect
+        with patch.object(refresh.psycopg, "connect", lambda **kw: connect(conninfo, **kw)):
+            refresh._schema_ready = False
+            refresh.ensure_schema()
+        refresh._schema_ready = False
+        self.assertEqual(db.execute(
+            "SELECT count(*) FROM information_schema.columns "
+            "WHERE table_name='district_refresh_runs' AND column_name='slot_start'").fetchone()[0], 1)
 
 
 if __name__ == "__main__":
