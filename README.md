@@ -70,10 +70,10 @@
 
 | 번호 | 기능 | 상세 내용 | 상태 |
 |---:|---|---|---|
-| 36 | 단지 총세대수 | 공개 공동주택 자료를 단지 식별·좌표로 연결해 세대수 표시 | **구현(매칭 단지)** |
-| 37 | 세대당 주차대수 | 총 주차대수 ÷ 세대수 계산·비교·필터 | **구현(매칭 단지)** |
-| 38 | 가까운 지하철역 | 역명·호선·좌표 간 직선거리·지도 및 거리 필터 | **구현(자료 보유 범위)** |
-| 39 | 주변 학교 정보 | 초·중·고별 학교명·직선거리·지도·학교급별 필터 | **구현(자료 보유 범위)** |
+| 36 | 단지 총세대수 | 공개 공동주택 자료를 단지 식별·좌표로 연결해 세대수 표시; 월간 updater가 공공자료를 DB에 갱신 | **구현(매칭 단지)** |
+| 37 | 세대당 주차대수 | 총 주차대수 ÷ 세대수 계산·비교·필터; 월간 updater가 공공자료를 DB에 갱신 | **구현(매칭 단지)** |
+| 38 | 가까운 지하철역 | 역명·호선·좌표 간 직선거리·지도 및 거리 필터; 월간 updater가 공공자료를 DB에 갱신 | **구현(자료 보유 범위)** |
+| 39 | 주변 학교 정보 | 초·중·고별 학교명·직선거리·지도·학교급별 필터; 월간 updater가 공공자료를 DB에 갱신 | **구현(자료 보유 범위)** |
 
 ### G. 운영·데이터 검증·최적화 (40, 42~49)
 
@@ -85,7 +85,7 @@
 | 44 | 공개 조회 JSON 분리 | 단지·최근 거래·전체 거래 이력 등 공개 읽기 전용 스냅샷 생성 코드 | **코드 구현** |
 | 45 | JSON 스냅샷 배포·복원 | 해시 기반 불변 객체·버전 매니페스트·R2 선택 배포·롤백 코드 | **코드 구현·운영 점검** |
 | 46 | React/지도 조회 최적화 | 자치구별 요청·목록 페이지네이션·영역/줌 기준 마커·중복 렌더 절감 | **코드 구현** |
-| 47 | 단지·시설 정보 정기 갱신 | 검증된 메타데이터 반영·GitHub Actions 시설 갱신 경로; 키·배포환경에 의존 | **코드 구현·운영 점검** |
+| 47 | 단지·시설 정보 정기 갱신 | 검증된 메타데이터 반영; 월간 updater가 공공자료를 DB에 갱신하고 일간 갱신 끝에 단지별 시설을 재계산(역·학교는 API 키 필요) | **코드 구현·운영 점검** |
 | 48 | 서울 통합 HGB 홀드아웃 검증 | 2025-04 학습 모델의 2025-04~09 평가; 개별 잔차·MAE·Bias·10/90백분위 집계 JSON | **검증 완료** |
 | 49 | GitHub→Cloudflare 자동 배포 | main 푸시 후 React 빌드·Cloudflare Pages 배포; 최근 성공 이력 확인 | **구현·배포 확인** |
 
@@ -93,7 +93,7 @@
 
 **지도 표시 기준:** 좌표와 유효한 실거래 표시가격이 있는 단지를 표시합니다. 과거 실거래 내역은 보존합니다.
 
-**남은 핵심 과제:** 28번 운영 모델 교체 관리와 45·47번 등의 배포 환경 실제 동작 점검. 상세 근거는 `docs/feature19-forecast-reference.md`, `docs/json-stage4-6.md`, `frontend/facilities/README.md` 참고.
+**남은 핵심 과제:** 28번 운영 모델 교체 관리와 45·47번 등의 배포 환경 실제 동작 점검. 상세 근거는 `docs/feature19-forecast-reference.md`, `docs/json-stage4-6.md`, `backend/facilities_seed/README.md` 참고.
 
 ## 로드맵 5단계 · 공개 서비스 통합 검증
 
@@ -191,7 +191,9 @@ docker compose exec db psql -U jipfit -d jipfit -c "SELECT * FROM refresh_runs O
 ```
 
 갱신 서비스는 최초 기동 시 당일 작업을 시도하고 이후 매일 한국시간 06시에 실행합니다. 컨테이너가 실행 중이어야 합니다.
-- **일일 실거래·신규 단지·좌표·개별 승인(`new-*.json`)**: 매일 KST 06:00 슬롯에서 최근 계약월 4개(`M-3 … M`)와 순환 과거월(구별 하루 1개 계약월), 미좌표·주소변경 대기 단지(회차당 최대 50개) 및 `new-*.json` 승인 파일을 처리합니다. 일시 장애 시 10분 간격으로 최대 3회(최초 포함 최대 4회) 재시도하며, 같은 슬롯에서 이미 완료된 구·계약월(`daily_trade_month_checkpoints`)과 처리된 주소는 건너뜁니다.
+- **일일 실거래·신규 단지·좌표·개별 승인(`new-*.json`)**: 매일 KST 06:00 슬롯에서 최근 계약월 4개(`M-3 … M`)와 순환 과거월(구별 하루 1개 계약월), 미좌표·주소변경 대기 단지(회차당 최대 50개) 및 `new-*.json` 승인 파일을 처리하고, 마지막에 단지별 시설(`complex_facilities`)을 다시 계산합니다. 일시 장애 시 10분 간격으로 최대 3회(최초 포함 최대 4회) 재시도하며, 같은 슬롯에서 이미 완료된 구·계약월(`daily_trade_month_checkpoints`)과 처리된 주소는 건너뜁니다.
+- **월간 작업 순서**: ① K-apt 기본정보 점검 → ② `verified-metadata/` 반영 → ③ 시설 공공자료 갱신 → ④ 멸실·재건축 판정입니다. ③이 실패해도 ④는 실행합니다.
+- **시설 공공자료(세대수·주차·역·학교)**: updater를 시작할 때 DB 표가 비어 있으면 `backend/facilities_seed/`의 초기 사본을 적재합니다. 월간 작업은 출처별 공공자료를 받아 DB를 갱신합니다. 역·학교는 `.env`의 `TDATA_SUBWAY_API_KEY`, `NEIS_API_KEY`가 필요하고, 키가 없으면 저장된 자료를 유지합니다. 바로 갱신하는 방법은 [시설 자료 안내](backend/facilities_seed/README.md)를 따릅니다.
 - **월간 K-apt 기본정보 점검·멸실·재건축 판정**: 매월 첫 가용 KST 06:00 정기 슬롯에서 구별 기존 `kapt_verified_links`를 보존한 채 이름·주소·준공연도 변경 후보(`complex_metadata_candidates`)를 탐지한 뒤, `JIPFIT_LIFECYCLE_AUTO=1`이면 모든 단지의 존치를 판정해 반영합니다. 일시 장애 시 30분 간격으로 최대 3회(최초 포함 최대 4회) 재시도하며, 날이 바뀌거나 재기동되어도 같은 달의 시도 횟수는 초기화되지 않습니다. 한도 소진 또는 미확정 후보(`EMPTY_DETAIL`, 후보 보류)는 다음 월간 정기 점검에서 새 자료와 다시 대조합니다.
 - **보류 조회·승인·재개 방법**:
   - 단지 식별 보류: `SELECT * FROM refresh_identity_pending WHERE status IN ('pending', 'invalid_decision');`로 조회합니다. 일반 별칭이나 신규 단지 확정은 `refresh_identity_decisions(district, source_id, target_id)`에 기록하고, 같은 지번·이름을 재사용하는 재건축 분리는 `refresh_identity_period_decisions(district, source_id, built, valid_from, valid_to, target_id, ...)`에 적용 구간과 구분 준공연도(`built`), 고유 접미사 ID(`issue_rebuild_complex_id`, 예: `<원천키>#2026`)를 등록합니다. 잘못된 결정을 수정한 뒤에는 `UPDATE refresh_identity_pending SET status='pending' WHERE status='invalid_decision' AND source_id=...;`로 재개합니다.
@@ -215,15 +217,14 @@ docker compose -f compose.yaml -f compose.deploy.yaml --profile updates up -d --
 
 ### Cloudflare Pages로 발표 버전 배포하기
 
-React와 API 전달 코드는 Pages에 올리고, FastAPI·PostgreSQL·updater는 현재 Docker 호스트에서 실행합니다. PowerShell에서 다음 명령으로 현재 실행 중인 웹 빌드를 내보내고 발표용 Quick Tunnel을 엽니다.
+React와 API 전달 코드는 Pages에 올리고, FastAPI·PostgreSQL·updater는 현재 Docker 호스트에서 실행합니다. Pages 배포는 main 푸시나 GitHub의 `deploy-pages.yml` 수동 실행으로 합니다(저장소 시크릿 `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`과 변수 `CLOUDFLARE_PAGES_PROJECT` 필요). 발표용 Quick Tunnel은 PowerShell에서 다음 명령으로 엽니다.
 
 ```powershell
-.\export-pages.ps1
 docker compose -f compose.yaml -f compose.pages.yaml --profile updates up -d web updater tunnel
 docker compose -f compose.yaml -f compose.pages.yaml logs --tail 50 tunnel
 ```
 
-Cloudflare Pages에서 Direct Upload 프로젝트를 만들고 pages-upload 폴더를 업로드합니다. Settings의 Variables and Secrets에서 Production 텍스트 변수 API_ORIGIN에 로그의 https://…trycloudflare.com 주소를 저장하고 다시 배포합니다. Pages 주소의 /api/complexes에서 JSON이 보이고 단지 선택 후 예측 표가 뜨는지 확인합니다. 네이버 지도 Web 서비스 URL에도 새 Pages 주소를 등록합니다.
+Pages 프로젝트 Settings의 Variables and Secrets에서 Production 텍스트 변수 API_ORIGIN에 로그의 https://…trycloudflare.com 주소를 저장하고 `deploy-pages.yml`을 다시 실행합니다. Pages 주소의 /api/complexes에서 JSON이 보이고 단지 선택 후 예측 표가 뜨는지 확인합니다. 네이버 지도 Web 서비스 URL에도 새 Pages 주소를 등록합니다.
 
 Quick Tunnel 주소는 터널 재생성 시 바뀔 수 있습니다. 상시 운영 시 Cloudflare에서 관리하는 고정 API 도메인을 Tunnel로 연결하고 API_ORIGIN을 해당 HTTPS 주소로 설정합니다. Docker 호스트를 끄면 Pages 화면에 예측 서버 연결 오류가 표시됩니다.
 

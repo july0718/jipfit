@@ -1,6 +1,6 @@
 # 월간 멸실·재건축 판정 운영 안내
 
-updater의 월간 작업이 매달 1일 06:00(KST)에 K-apt 갱신과 검증 메타데이터 반영을 마친 뒤 모든 단지의 존치를 판정합니다. 확정 판정은 바로 DB에 반영되고, 정적 메타데이터는 07:45 Pages 작업이 다시 배포합니다. **운영자가 할 일은 보류 단지를 판정해 반영하는 것입니다.**
+updater의 월간 작업이 매달 1일 06:00(KST)에 K-apt 갱신과 검증 메타데이터 반영을 마친 뒤 모든 단지의 존치를 판정합니다. 확정 판정은 바로 DB에 반영되고 공개 API에 바로 보입니다. **운영자가 할 일은 보류 단지를 판정해 반영하는 것입니다.**
 
 설계는 저장소 루트의 `plan-lifecycle-auto.md`, 코드는 `backend/lifecycle_check/`와 `backend/lifecycle_admin.py`에 있습니다.
 
@@ -204,7 +204,7 @@ docker compose -f compose.yaml -f compose.pages.yaml --profile updates exec upda
 
 > **다음 달 1일 전에 처리하세요.** 처리하지 않은 `대량확정보류` 단지는 다음 달에 다시 판정합니다. 그달의 확정 수가 한도 이하이면 **자동 반영됩니다.** 반영하면 안 되는 단지는 `resolve --existence present`로 정합니다.
 
-반영 결과는 공개 API에 바로 보입니다. 정적 메타데이터를 바로 바꾸려면 GitHub에서 `deploy-pages.yml`을 수동 실행합니다.
+반영 결과는 공개 API에 바로 보입니다.
 
 ## 되돌리기
 
